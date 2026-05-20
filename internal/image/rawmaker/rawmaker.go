@@ -3,7 +3,9 @@ package rawmaker
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/chroot"
@@ -124,8 +126,14 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 		return fmt.Errorf("failed to create loop device: %w", err)
 	}
 
+	// Setup signal handler for graceful cleanup on Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	
 	// Setup cleanup for loop device (always needed)
 	defer func() {
+		signal.Stop(sigChan)
+		close(sigChan)
 		if loopDevPath != "" {
 			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
 				log.Errorf("Failed to detach loopback device %s: %v", loopDevPath, detachErr)
@@ -133,6 +141,20 @@ func (rawMaker *RawMaker) BuildRawImage() error {
 				log.Infof("Successfully detached loopback device: %s", loopDevPath)
 			}
 		}
+	}()
+
+	// Goroutine to handle interrupt signals
+	go func() {
+		sig := <-sigChan
+		log.Warnf("Received signal %v, cleaning up loop device %s", sig, loopDevPath)
+		if loopDevPath != "" {
+			if detachErr := rawMaker.LoopDev.LoopSetupDelete(loopDevPath); detachErr != nil {
+				log.Errorf("Failed to detach loopback device on signal %s: %v", loopDevPath, detachErr)
+			} else {
+				log.Infof("Successfully detached loopback device on signal: %s", loopDevPath)
+			}
+		}
+		os.Exit(1)
 	}()
 
 	log.Infof("Created loop device: %s", loopDevPath)
