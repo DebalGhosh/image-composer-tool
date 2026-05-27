@@ -127,6 +127,12 @@ func (imageOs *ImageOs) InstallInitrd() (installRoot, versionInfo string, err er
 		return
 	}
 
+	log.Infof("Image SBOM generation...")
+	if _, sbomErr := imageOs.generateSBOM(imageOs.installRoot, imageOs.template); sbomErr != nil {
+		log.Warnf("SBOM generation failed: %v", sbomErr)
+		// Don't fail the build if SBOM generation fails
+	}
+
 	return
 }
 
