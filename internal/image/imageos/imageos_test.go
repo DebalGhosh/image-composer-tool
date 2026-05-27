@@ -4260,15 +4260,39 @@ func TestGenerateSBOMForRawAndISOImages(t *testing.T) {
 				template: template,
 			}
 
-			_, err := imageOs.generateSBOM(installRoot, template)
+			canonicalSBOM := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+			if err := os.Remove(canonicalSBOM); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to clean canonical SBOM %s: %v", canonicalSBOM, err)
+			}
+
+			stagedPattern := filepath.Join(config.TempDir(), fmt.Sprintf("spdx_manifest_%s_sbom-%s_*.json", tc.pkgType, tc.imageType))
+			existingStaged, err := filepath.Glob(stagedPattern)
+			if err != nil {
+				t.Fatalf("failed to enumerate staged SBOM files with pattern %s: %v", stagedPattern, err)
+			}
+			for _, f := range existingStaged {
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					t.Fatalf("failed to clean staged SBOM %s: %v", f, err)
+				}
+			}
+
+			_, err = imageOs.generateSBOM(installRoot, template)
 			if err != nil {
 				t.Fatalf("generateSBOM returned error for image type %s: %v", tc.imageType, err)
 			}
 
-			sbomPath := filepath.Join(config.TempDir(), manifest.DefaultSPDXFile)
+			generatedStaged, err := filepath.Glob(stagedPattern)
+			if err != nil {
+				t.Fatalf("failed to enumerate generated staged SBOM files with pattern %s: %v", stagedPattern, err)
+			}
+			if len(generatedStaged) != 1 {
+				t.Fatalf("expected exactly one staged SBOM for image type %s, found %d", tc.imageType, len(generatedStaged))
+			}
+
+			sbomPath := generatedStaged[0]
 			rawSBOM, err := os.ReadFile(sbomPath)
 			if err != nil {
-				t.Fatalf("failed reading canonical SBOM %s: %v", sbomPath, err)
+				t.Fatalf("failed reading staged SBOM %s: %v", sbomPath, err)
 			}
 
 			if !json.Valid(rawSBOM) {
@@ -4288,7 +4312,10 @@ func TestGenerateSBOMForRawAndISOImages(t *testing.T) {
 			}
 
 			if err := os.Remove(sbomPath); err != nil && !os.IsNotExist(err) {
-				t.Fatalf("failed to clean canonical SBOM %s: %v", sbomPath, err)
+				t.Fatalf("failed to clean staged SBOM %s: %v", sbomPath, err)
+			}
+			if err := os.Remove(canonicalSBOM); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("failed to clean canonical SBOM %s: %v", canonicalSBOM, err)
 			}
 		})
 	}
