@@ -76,8 +76,10 @@ func (loopDev *LoopDev) LoopSetupDelete(loopDevPath string) error {
 		}
 		
 		log.Warnf("Standard detach failed for %s, attempting force detach: %v", loopDevPath, err)
-		// Try force detach as fallback
-		forceCmd := fmt.Sprintf("losetup -D %s", loopDevPath)
+		// Try detach again after a brief retry. NOTE: do NOT use `losetup -D` here
+		// — that flag detaches EVERY loop device on the host and ignores the path
+		// argument, which would tear down unrelated loop mounts. Stick with `-d`.
+		forceCmd := fmt.Sprintf("losetup -d %s", loopDevPath)
 		if _, forceErr := shell.ExecCmd(forceCmd, true, shell.HostPath, nil); forceErr != nil {
 			forceErrMsg := forceErr.Error()
 			// Check if already gone
@@ -85,7 +87,7 @@ func (loopDev *LoopDev) LoopSetupDelete(loopDevPath string) error {
 				log.Infof("Loop device %s already cleaned by system", loopDevPath)
 				return nil
 			}
-			log.Errorf("Failed to detach loop device %s with both -d and -D: %v, %v", loopDevPath, err, forceErr)
+			log.Errorf("Failed to detach loop device %s after retry: %v, %v", loopDevPath, err, forceErr)
 			return fmt.Errorf("failed to delete loop device %s: %w", loopDevPath, err)
 		}
 		log.Infof("Successfully force-detached loop device: %s", loopDevPath)
@@ -132,8 +134,10 @@ func (loopDev *LoopDev) findAndUnmount(data interface{}) error {
 			if name, ok := v["name"].(string); ok {
 				mountDev := fmt.Sprintf("/dev/%s", name)
 				log.Infof("Unmounting partition: %s from %s", mountDev, mountPoint)
+				// Already a lazy unmount (-l). If this fails, log and continue —
+				// the loop device detach below will still proceed.
 				if _, err := shell.ExecCmd(fmt.Sprintf("umount -l %s", mountPoint), true, shell.HostPath, nil); err != nil {
-					log.Warnf("Failed to lazily unmount %s: %v", mountPoint, err)
+					log.Warnf("Failed to lazy-unmount %s: %v", mountPoint, err)
 				} else {
 					log.Infof("Successfully unmounted: %s", mountPoint)
 				}
