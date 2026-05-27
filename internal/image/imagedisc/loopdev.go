@@ -133,7 +133,7 @@ func (loopDev *LoopDev) findAndUnmount(data interface{}) error {
 				mountDev := fmt.Sprintf("/dev/%s", name)
 				log.Infof("Unmounting partition: %s from %s", mountDev, mountPoint)
 				if _, err := shell.ExecCmd(fmt.Sprintf("umount -l %s", mountPoint), true, shell.HostPath, nil); err != nil {
-					log.Warnf("Failed to unmount %s: %v, trying lazy unmount", mountPoint, err)
+					log.Warnf("Failed to lazily unmount %s: %v", mountPoint, err)
 				} else {
 					log.Infof("Successfully unmounted: %s", mountPoint)
 				}
