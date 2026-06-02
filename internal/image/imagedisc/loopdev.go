@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -130,13 +131,15 @@ func (loopDev *LoopDev) findAndUnmount(data interface{}) error {
 	switch v := data.(type) {
 	case map[string]interface{}:
 		// Check if this entry has a mountpoint
-		if mountPoint, ok := v["mountpoint"].(string); ok && mountPoint != "" && mountPoint != "null" {
+		if mountPoint, ok := v["mountpoint"].(string); ok && mountPoint != "" {
 			if name, ok := v["name"].(string); ok {
 				mountDev := fmt.Sprintf("/dev/%s", name)
 				log.Infof("Unmounting partition: %s from %s", mountDev, mountPoint)
+				// Shell-escape the mount point to safely handle spaces and special characters
+				escapedMountPoint := strconv.Quote(mountPoint)
 				// Already a lazy unmount (-l). If this fails, log and continue —
 				// the loop device detach below will still proceed.
-				if _, err := shell.ExecCmd(fmt.Sprintf("umount -l %s", mountPoint), true, shell.HostPath, nil); err != nil {
+				if _, err := shell.ExecCmd(fmt.Sprintf("umount -l %s", escapedMountPoint), true, shell.HostPath, nil); err != nil {
 					log.Warnf("Failed to lazy-unmount %s: %v", mountPoint, err)
 				} else {
 					log.Infof("Successfully unmounted: %s", mountPoint)
