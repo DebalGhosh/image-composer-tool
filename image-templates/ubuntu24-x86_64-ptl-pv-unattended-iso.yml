@@ -358,7 +358,6 @@ systemConfig:
         - linux-headers-6.18-intel_260427t075939z-r2
 
   packages:
-    - libssl3t64
     - bluez
     - bsdutils
     - cloud-utils
