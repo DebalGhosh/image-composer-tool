@@ -127,7 +127,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--os", help="Filter by target.os (e.g. ubuntu, debian, azl, elxr)")
     parser.add_argument("--dist", help="Filter by target.dist (e.g. ubuntu24, debian13)")
     parser.add_argument("--arch", help="Filter by target.arch (e.g. x86_64, aarch64)")
-    parser.add_argument("--image-type", help="Filter by target.imageType (e.g. raw, iso, initrd)")
+    parser.add_argument("--image-type", help="Filter by target.imageType (e.g. raw, iso, img)")
     parser.add_argument("--keyword", help="Case-insensitive keyword search across all fields")
     parser.add_argument(
         "--summary-only",
