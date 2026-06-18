@@ -146,8 +146,7 @@ partition layout.
 - Grow supported filesystems.
 - Regenerate initramfs, UKI, or bootloader configuration when required.
 - Generate package inventory and SBOM outputs.
-- Optionally compare baseline and output images using post-compose CLI modes:
-SBOM-only or full comparison.
+- Optionally compare baseline and output images using post-compose CLI modes: SBOM-only or full comparison.
 - Emit updated image artifacts.
 
 ### 3. ISO Remastering
