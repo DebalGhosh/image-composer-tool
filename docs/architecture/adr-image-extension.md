@@ -687,9 +687,9 @@ Suggested defaults:
 
 - no comparison report by default (explicit opt-in).
 - when enabled for overlay mode, baseline image is inferred from
-`baseline.source.path` in the template.
+  `baseline.source.path` in the template.
 - output image is inferred from the primary artifact produced in the working
-output path for the current build.
+  output path for the current build.
 
 Deferred from this ADR:
 
