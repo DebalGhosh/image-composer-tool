@@ -61,6 +61,7 @@ For build options (Earthly, Debian package) and prerequisite details, see the
 | [Custom Build Actions](./tutorial/configure-additional-actions-for-build.md) | Commands during image compose (chroot)   |
 | [Custom Initrd Script](./tutorial/configure-custom-initrd-script.md)       | Debian 13 GRUB initramfs-tools initrd hook |
 | [Multiple Repos](./tutorial/configure-multiple-package-repositories.md)      | Using multiple package repositories      |
+| [Ubuntu 24 agent install scripts](./tutorial/ubuntu24-agent-install-scripts.md) | APT/pip coverage for Intel vs NVIDIA post-boot installers |
 
 ## Get Help
 
