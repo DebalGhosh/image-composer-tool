@@ -1,8 +1,11 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
 )
@@ -209,5 +212,188 @@ func convertSearchResult(sr rag.SearchResult) searchResultJSON {
 		SemanticScore: sr.SemanticScore,
 		KeywordScore:  sr.KeywordScore,
 		PackageScore:  sr.PackageScore,
+	}
+}
+
+// ─── SSE Event Types ────────────────────────────────────────────────────
+// These structs match the OpenAPI SSE event schemas exactly.
+
+// sseSearchResults matches SSESearchResults (event: search_results).
+type sseSearchResults struct {
+	Results   []searchResultJSON `json:"results"`
+	QueryType string             `json:"query_type"`
+}
+
+// sseGenerationStart matches SSEGenerationStart (event: generation_start).
+type sseGenerationStart struct {
+	SourceTemplates []string `json:"source_templates"`
+}
+
+// sseToken matches SSEToken (event: token). Field is "content" per spec.
+type sseToken struct {
+	Content string `json:"content"`
+}
+
+// sseGenerationComplete matches SSEGenerationComplete (event: generation_complete).
+type sseGenerationComplete struct {
+	YAML             string `json:"yaml"`
+	GenerationTimeMs int64  `json:"generation_time_ms"`
+}
+
+// sseComplete matches SSEComplete (event: complete).
+type sseComplete struct {
+	SessionID  string      `json:"session_id"`
+	YAML       string      `json:"yaml"`
+	Validation interface{} `json:"validation,omitempty"`
+	Changes    []struct{}  `json:"changes"`
+}
+
+// sseError matches SSEError (event: error).
+type sseError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Retry   bool   `json:"retry"`
+}
+
+// writeSSEEvent writes a single Server-Sent Event to the response.
+// Format: "event: <type>\ndata: <json>\n\n"
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, data any) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal SSE data: %w", err)
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, jsonData)
+	if err != nil {
+		return fmt.Errorf("failed to write SSE event: %w", err)
+	}
+	flusher.Flush()
+	return nil
+}
+
+// handleStream handles SSE streaming AI template generation.
+// GET /api/v1/ai/stream?query=...&session_id=...
+//
+// Emits SSE events in order per the OpenAPI spec:
+//
+//	search_results → generation_start → token (×N) → generation_complete → complete
+//
+// On error, emits a single "error" event and closes the stream.
+// session_id is accepted but ignored in Phase 2 (sessions are Phase 3).
+func handleStream(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := strings.TrimSpace(r.URL.Query().Get("query"))
+		sessionID := r.URL.Query().Get("session_id") // Accepted, ignored in Phase 2
+
+		// Validate query is present and within length limits.
+		if query == "" {
+			respondError(w, http.StatusBadRequest, ErrCodeQueryRequired,
+				"A query string is required", nil)
+			return
+		}
+		if len(query) > maxQueryLength {
+			respondError(w, http.StatusBadRequest, ErrCodeQueryTooLong,
+				"Query exceeds 2000 characters",
+				map[string]any{"max_length": maxQueryLength})
+			return
+		}
+
+		// Verify the response writer supports flushing (required for SSE).
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			respondError(w, http.StatusInternalServerError, ErrCodeEngineUnavailable,
+				"Streaming not supported by server transport", nil)
+			return
+		}
+
+		// Set SSE headers before writing any events.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		ctx := r.Context()
+		startTime := time.Now()
+
+		// Start streaming generation (search is synchronous).
+		result, err := s.engine.GenerateStream(ctx, query)
+		if err != nil {
+			errMsg := err.Error()
+			code := ErrCodeGenerationFailed
+			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+				code = ErrCodeProviderUnavail
+			}
+			_ = writeSSEEvent(w, flusher, "error", sseError{
+				Code:    code,
+				Message: errMsg,
+				Retry:   true,
+			})
+			return
+		}
+
+		// Event 1: search_results — RAG search results with scores.
+		jsonResults := make([]searchResultJSON, 0, len(result.SearchResults))
+		for _, sr := range result.SearchResults {
+			jsonResults = append(jsonResults, convertSearchResult(sr))
+		}
+		if err := writeSSEEvent(w, flusher, "search_results", sseSearchResults{
+			Results:   jsonResults,
+			QueryType: "semantic",
+		}); err != nil {
+			return // Client disconnected
+		}
+
+		// Event 2: generation_start — which templates are used as context.
+		if err := writeSSEEvent(w, flusher, "generation_start", sseGenerationStart{
+			SourceTemplates: result.SourceTemplates,
+		}); err != nil {
+			return
+		}
+
+		// Events 3…N: token — individual LLM output tokens.
+		var fullYAML strings.Builder
+		for token := range result.TokenChan {
+			fullYAML.WriteString(token)
+			if err := writeSSEEvent(w, flusher, "token", sseToken{
+				Content: token,
+			}); err != nil {
+				return // Client disconnected, context cancellation will clean up
+			}
+		}
+
+		// After tokenChan closes, check for streaming errors (non-blocking).
+		var streamErr error
+		select {
+		case streamErr = <-result.ErrChan:
+		default:
+		}
+
+		if streamErr != nil {
+			_ = writeSSEEvent(w, flusher, "error", sseError{
+				Code:    ErrCodeGenerationFailed,
+				Message: streamErr.Error(),
+				Retry:   true,
+			})
+			return
+		}
+
+		generationTimeMs := time.Since(startTime).Milliseconds()
+		cleanedYAML := rag.CleanYAMLResponse(fullYAML.String())
+
+		// Event N+1: generation_complete — full YAML and timing.
+		if err := writeSSEEvent(w, flusher, "generation_complete", sseGenerationComplete{
+			YAML:             cleanedYAML,
+			GenerationTimeMs: generationTimeMs,
+		}); err != nil {
+			return
+		}
+
+		// Event N+2: complete — final result with session info.
+		// session_id is empty in Phase 2; will be populated when sessions
+		// are implemented in Phase 3.
+		_ = writeSSEEvent(w, flusher, "complete", sseComplete{
+			SessionID:  sessionID,
+			YAML:       cleanedYAML,
+			Validation: nil,
+			Changes:    []struct{}{},
+		})
 	}
 }

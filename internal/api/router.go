@@ -35,8 +35,8 @@ func NewRouter(s *Server) http.Handler {
 	// mux.HandleFunc("GET /api/v1/sessions/{id}", handleGetSession(s))
 	// mux.HandleFunc("DELETE /api/v1/sessions/{id}", handleDeleteSession(s))
 
-	// ── Future: SSE Streaming (Phase 2) ─────────────────────────────────
-	// mux.HandleFunc("GET /api/v1/ai/stream", handleStream(s))
+	// ── SSE Streaming (Phase 2) ─────────────────────────────────────────
+	mux.HandleFunc("GET /api/v1/ai/stream", handleStream(s))
 
 	// ── Future: Template CRUD (Phase 1, later) ──────────────────────────
 	// mux.HandleFunc("POST /api/v1/templates", handleCreateTemplate(s))

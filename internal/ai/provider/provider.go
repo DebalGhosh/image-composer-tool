@@ -2,6 +2,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -31,6 +33,19 @@ type ChatProvider interface {
 
 	// ModelID returns the identifier of the chat model being used.
 	ModelID() string
+}
+
+// StreamingChatProvider extends chat capabilities with token-by-token streaming.
+// This is a separate interface (not added to ChatProvider) to avoid breaking
+// existing implementations. Use a type assertion to check support:
+//
+//	if sp, ok := chatProvider.(StreamingChatProvider); ok { ... }
+type StreamingChatProvider interface {
+	// ChatStream opens a streaming chat session. It returns a channel that
+	// delivers individual tokens, an error channel for mid-stream failures,
+	// and an immediate error if the connection cannot be established.
+	// The tokens channel is always closed when generation completes.
+	ChatStream(ctx context.Context, messages []ChatMessage) (tokens <-chan string, errc <-chan error, err error)
 }
 
 // ChatMessage represents a message in a chat conversation.
@@ -187,6 +202,95 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 	}
 
 	return chatResp.Message.Content, nil
+}
+
+// ollamaStreamChunk represents a single chunk in Ollama's NDJSON stream.
+type ollamaStreamChunk struct {
+	Model   string `json:"model"`
+	Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+	Done bool `json:"done"`
+}
+
+// ChatStream opens a streaming chat session with Ollama.
+// Ollama streams NDJSON (one JSON object per line) with stream: true.
+func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage) (<-chan string, <-chan error, error) {
+	reqBody := ollamaChatRequest{
+		Model:    p.chatModel,
+		Messages: messages,
+		Stream:   true,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/api/chat", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Use a client without overall timeout for streaming — context
+	// cancellation handles cleanup if the caller disconnects.
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to call Ollama API: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("Ollama API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	tokens := make(chan string)
+	errc := make(chan error, 1)
+
+	go func() {
+		defer close(tokens)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		// Increase buffer for safety (default 64KB is usually fine for chat).
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var chunk ollamaStreamChunk
+			if err := json.Unmarshal(line, &chunk); err != nil {
+				errc <- fmt.Errorf("failed to parse Ollama stream chunk: %w", err)
+				return
+			}
+
+			if chunk.Message.Content != "" {
+				select {
+				case tokens <- chunk.Message.Content:
+				case <-ctx.Done():
+					errc <- ctx.Err()
+					return
+				}
+			}
+
+			if chunk.Done {
+				return
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errc <- fmt.Errorf("Ollama stream read error: %w", err)
+		}
+	}()
+
+	return tokens, errc, nil
 }
 
 // DefaultOpenAIBaseURL is the default base URL for OpenAI API.
@@ -365,4 +469,112 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 	}
 
 	return chatResp.Choices[0].Message.Content, nil
+}
+
+// openAIChatStreamRequest adds the stream flag for OpenAI streaming requests.
+type openAIChatStreamRequest struct {
+	Model    string        `json:"model"`
+	Messages []ChatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+}
+
+// openAIStreamChunk represents a single chunk in OpenAI's SSE stream.
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// ChatStream opens a streaming chat session with OpenAI.
+// OpenAI streams SSE with "data: {json}" lines, ending with "data: [DONE]".
+func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage) (<-chan string, <-chan error, error) {
+	reqBody := openAIChatStreamRequest{
+		Model:    p.chatModel,
+		Messages: messages,
+		Stream:   true,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	// Use a client without overall timeout for streaming.
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to call OpenAI API: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	tokens := make(chan string)
+	errc := make(chan error, 1)
+
+	go func() {
+		defer close(tokens)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Skip empty lines and non-data lines (SSE format).
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data: ")
+
+			// OpenAI signals end of stream with [DONE].
+			if data == "[DONE]" {
+				return
+			}
+
+			var chunk openAIStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				errc <- fmt.Errorf("failed to parse OpenAI stream chunk: %w", err)
+				return
+			}
+
+			if chunk.Error != nil {
+				errc <- fmt.Errorf("OpenAI API error: %s", chunk.Error.Message)
+				return
+			}
+
+			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+				select {
+				case tokens <- chunk.Choices[0].Delta.Content:
+				case <-ctx.Done():
+					errc <- ctx.Err()
+					return
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			errc <- fmt.Errorf("OpenAI stream read error: %w", err)
+		}
+	}()
+
+	return tokens, errc, nil
 }
