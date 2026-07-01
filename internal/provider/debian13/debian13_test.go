@@ -781,7 +781,7 @@ func TestDebian13BuildImageUnsupportedType(t *testing.T) {
 func TestDebian13BuildImageValidTypes(t *testing.T) {
 	debian := &debian13{}
 
-	validTypes := []string{"raw", "img", "iso", "wsl2"}
+	validTypes := []string{"raw", "img", "iso", "wsl2", "qcow2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {
@@ -2007,7 +2007,7 @@ func TestDebian13BuildImageAllTypes(t *testing.T) {
 		chrootEnv: &mockChrootEnv{},
 	}
 
-	imageTypes := []string{"raw", "img", "iso", "wsl2"}
+	imageTypes := []string{"raw", "img", "iso", "wsl2", "qcow2"}
 
 	for _, imgType := range imageTypes {
 		t.Run(imgType, func(t *testing.T) {

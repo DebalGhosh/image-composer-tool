@@ -102,6 +102,63 @@ func TestMergeConfigurationsImageInfo(t *testing.T) {
 	}
 }
 
+func TestMergeConfigurationsImplicitQcow2ArtifactFromDefaults(t *testing.T) {
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		Disk: DiskConfig{
+			Name:      "Default_Raw",
+			Artifacts: []ArtifactInfo{{Type: "raw"}},
+		},
+	}
+
+	userTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "qcow2"},
+	}
+
+	result, err := MergeConfigurations(userTemplate, defaultTemplate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Target.ImageType != "qcow2" {
+		t.Fatalf("expected merged target image type 'qcow2', got '%s'", result.Target.ImageType)
+	}
+	if len(result.Disk.Artifacts) != 1 || result.Disk.Artifacts[0].Type != "qcow2" {
+		t.Fatalf("expected implicit qcow2 artifact, got %+v", result.Disk.Artifacts)
+	}
+}
+
+func TestMergeConfigurationsQcow2RespectsExplicitUserDiskArtifacts(t *testing.T) {
+	defaultTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "default", Version: "1.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "raw"},
+		Disk: DiskConfig{
+			Name:      "Default_Raw",
+			Artifacts: []ArtifactInfo{{Type: "raw"}},
+		},
+	}
+
+	userTemplate := &ImageTemplate{
+		Image:  ImageInfo{Name: "user", Version: "2.0.0"},
+		Target: TargetInfo{OS: "ubuntu", Dist: "ubuntu24", Arch: "x86_64", ImageType: "qcow2"},
+		Disk: DiskConfig{
+			Name:      "UserDisk",
+			Artifacts: []ArtifactInfo{{Type: "vmdk"}},
+		},
+	}
+
+	result, err := MergeConfigurations(userTemplate, defaultTemplate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Disk.Artifacts) != 1 || result.Disk.Artifacts[0].Type != "vmdk" {
+		t.Fatalf("expected user artifact to be preserved, got %+v", result.Disk.Artifacts)
+	}
+}
+
 func TestMergeConfigurationsBaseline(t *testing.T) {
 	// A user-provided overlay baseline must survive the merge even when the
 	// default template has none; otherwise the build silently falls back to

@@ -1076,7 +1076,7 @@ func TestUbuntuBuildImageUnsupportedType(t *testing.T) {
 func TestUbuntuBuildImageValidTypes(t *testing.T) {
 	ubuntu := &ubuntu{}
 
-	validTypes := []string{"raw", "img", "iso", "wsl2"}
+	validTypes := []string{"raw", "img", "iso", "wsl2", "qcow2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {
@@ -2351,7 +2351,7 @@ func TestUbuntuBuildImageAllTypes(t *testing.T) {
 		chrootEnv: &mockChrootEnv{},
 	}
 
-	imageTypes := []string{"raw", "img", "iso", "wsl2"}
+	imageTypes := []string{"raw", "img", "iso", "wsl2", "qcow2"}
 
 	for _, imgType := range imageTypes {
 		t.Run(imgType, func(t *testing.T) {

@@ -1272,6 +1272,61 @@ systemConfig:
 	}
 }
 
+func TestDefaultConfigLoaderQcow2UsesRawDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldConfigDir := Global().ConfigDir
+	Global().ConfigDir = tmpDir
+	t.Cleanup(func() { Global().ConfigDir = oldConfigDir })
+
+	defaultDir := filepath.Join(tmpDir, "osv", "ubuntu", "ubuntu24", "imageconfigs", "defaultconfigs")
+	if err := os.MkdirAll(defaultDir, 0755); err != nil {
+		t.Fatalf("failed to create default config dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "general"), 0755); err != nil {
+		t.Fatalf("failed to create general config dir: %v", err)
+	}
+
+	defaultConfig := `image:
+  name: ubuntu-default-raw
+  version: "24.04"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: raw
+
+disk:
+  name: Default_Raw
+  artifacts:
+    - type: raw
+
+systemConfig:
+  name: Default_Raw
+  packages:
+    - ubuntu-minimal
+`
+	defaultPath := filepath.Join(defaultDir, "default-raw-x86_64.yml")
+	if err := os.WriteFile(defaultPath, []byte(defaultConfig), 0644); err != nil {
+		t.Fatalf("failed to write default config: %v", err)
+	}
+
+	loader := NewDefaultConfigLoader("ubuntu", "ubuntu24", "x86_64")
+	template, err := loader.LoadDefaultConfig("qcow2")
+	if err != nil {
+		t.Fatalf("expected qcow2 default config to load via raw default file, got error: %v", err)
+	}
+	if template.Target.ImageType != "raw" {
+		t.Errorf("expected loaded default image type 'raw', got '%s'", template.Target.ImageType)
+	}
+	if len(template.Disk.Artifacts) == 0 {
+		t.Fatal("expected default config to include at least one artifact")
+	}
+	if template.Disk.Artifacts[0].Type != "raw" {
+		t.Errorf("expected raw default artifact, got '%s'", template.Disk.Artifacts[0].Type)
+	}
+}
+
 func TestWSL2DefaultConfigs(t *testing.T) {
 	defaults := []string{
 		"azure-linux/azl3",

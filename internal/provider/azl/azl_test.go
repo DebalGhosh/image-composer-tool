@@ -526,7 +526,7 @@ func TestAzlBuildImageUnsupportedType(t *testing.T) {
 func TestAzlBuildImageValidTypes(t *testing.T) {
 	azl := &AzureLinux{}
 
-	validTypes := []string{"raw", "img", "iso", "wsl2"}
+	validTypes := []string{"raw", "img", "iso", "wsl2", "qcow2"}
 
 	for _, imageType := range validTypes {
 		t.Run(imageType, func(t *testing.T) {

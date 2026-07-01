@@ -208,6 +208,43 @@ systemConfig:
 	}
 }
 
+func TestValidQcow2Template(t *testing.T) {
+	qcow2TemplateYAML := `image:
+  name: test-qcow2-image
+  version: "1.0.0"
+
+target:
+  os: ubuntu
+  dist: ubuntu24
+  arch: x86_64
+  imageType: qcow2
+
+disk:
+  name: qcow2-disk
+  artifacts:
+    - type: qcow2
+
+systemConfig:
+  name: default
+  packages:
+    - ubuntu-minimal
+`
+
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(qcow2TemplateYAML), &raw); err != nil {
+		t.Fatalf("yml parsing error: %v", err)
+	}
+
+	dataJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("json marshaling error: %v", err)
+	}
+
+	if err := ValidateImageTemplateJSON(dataJSON); err != nil {
+		t.Errorf("expected qcow2 template to pass validation, but got: %v", err)
+	}
+}
+
 func TestInvalidWSL2TemplateWithPartitionTable(t *testing.T) {
 	invalidTemplateYAML := `image:
   name: test-wsl2-image

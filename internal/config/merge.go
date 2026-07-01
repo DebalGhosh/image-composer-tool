@@ -35,6 +35,8 @@ func (d *DefaultConfigLoader) LoadDefaultConfig(imageType string) (*ImageTemplat
 	switch imageType {
 	case "raw":
 		defaultConfigFile = fmt.Sprintf("default-raw-%s.yml", d.targetArch)
+	case "qcow2":
+		defaultConfigFile = fmt.Sprintf("default-raw-%s.yml", d.targetArch)
 	case "img":
 		defaultConfigFile = fmt.Sprintf("default-initrd-%s.yml", d.targetArch)
 	case "iso":
@@ -131,6 +133,8 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 		mergedTemplate.Disk = userTemplate.Disk
 		log.Debugf("User disk config overrides default")
 	}
+
+	applyImplicitQcow2Artifact(userTemplate, &mergedTemplate)
 
 	// System configuration - merge intelligently
 	if !isEmptySystemConfig(userTemplate.SystemConfig) {
@@ -566,6 +570,26 @@ func isEmptyDiskConfig(disk DiskConfig) bool {
 		disk.PartitionTableType == "" &&
 		len(disk.Artifacts) == 0 &&
 		len(disk.Partitions) == 0
+}
+
+// applyImplicitQcow2Artifact ensures that target.imageType=qcow2 yields qcow2
+// output even when the user relies on default disk configuration.
+func applyImplicitQcow2Artifact(userTemplate *ImageTemplate, mergedTemplate *ImageTemplate) {
+	if userTemplate == nil || mergedTemplate == nil {
+		return
+	}
+
+	if mergedTemplate.Target.ImageType != "qcow2" {
+		return
+	}
+
+	// Respect explicit user disk/artifact choices.
+	if !isEmptyDiskConfig(userTemplate.Disk) {
+		return
+	}
+
+	mergedTemplate.Disk.Artifacts = []ArtifactInfo{{Type: "qcow2"}}
+	log.Debug("Applied implicit qcow2 artifact for target.imageType=qcow2")
 }
 
 func isEmptySystemConfig(config SystemConfig) bool {

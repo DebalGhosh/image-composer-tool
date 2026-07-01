@@ -120,6 +120,8 @@ func (p *Emt) BuildImage(template *config.ImageTemplate) error {
 	switch template.Target.ImageType {
 	case "raw":
 		return p.buildRawImage(template)
+	case "qcow2":
+		return p.buildRawImage(template)
 	case "img":
 		return p.buildInitrdImage(template)
 	case "iso":
