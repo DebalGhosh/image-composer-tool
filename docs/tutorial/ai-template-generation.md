@@ -8,8 +8,9 @@ in real, working examples.
 > **Phase 1** - This guide covers the current implementation: core RAG
 > with basic CLI (semantic search, template generation, embedding cache).
 > See the [ADR](../architecture/adr-template-enriched-rag.md) for the full
-> roadmap (query classification, conversational refinement, agentic
-> validation).
+> target architecture (an agentic tool-use loop with retrieval, package
+> verification, schema validation and self-correction, and Claude as a
+> first-class agentic provider alongside the Ollama default).
 
 ## Table of Contents
 
@@ -311,7 +312,7 @@ package lists.
 
 ## Related Documentation
 
-- [ADR: Template-Enriched RAG](../architecture/adr-template-enriched-rag.md) -
+- [ADR: Agentic Template-Enriched RAG](../architecture/adr-template-enriched-rag.md) -
   Full architecture decision record, design details, and roadmap
 - [Usage Guide](usage-guide.md) - General image-composer-tool usage
 - [Image Templates](../architecture/image-composer-tool-templates.md) -
