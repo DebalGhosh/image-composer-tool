@@ -26,6 +26,11 @@ esac
 #   HERMES_INSTALL_FLAGS="--skip-setup --non-interactive --skip-browser"
 #   HERMES_INSTALL_AS_USER=
 #   AGENT_INSTALL_PROXY_MODE=auto   # auto | on | off (same as agent-install.sh)
+#   AGENT_INSTALL_HTTP_PROXY=       # no default; set to your proxy, e.g. http://proxy.example.com:911
+#   AGENT_INSTALL_HTTPS_PROXY=      # no default; set to your proxy, e.g. http://proxy.example.com:912
+# Proxy precedence: existing http_proxy/https_proxy env (use sudo -E) wins. AGENT_INSTALL_* only
+# apply when set and mode=on, or as an auto-mode fallback after a failed direct probe. No proxy
+# URLs are baked in, so the script works unchanged outside any specific corporate network.
 #
 # Agent (OS) layer — public install paths (Jun 2026):
 #   Hermes    — hermes-agent.nousresearch.com/install.sh
@@ -69,8 +74,8 @@ HERMES_INSTALL_FLAGS="${HERMES_INSTALL_FLAGS:---skip-setup --non-interactive --s
 HERMES_INSTALL_AS_USER="${HERMES_INSTALL_AS_USER:-}"
 
 AGENT_INSTALL_PROXY_MODE="${AGENT_INSTALL_PROXY_MODE:-auto}"
-AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-http://proxy-dmz.intel.com:911}"
-AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-http://proxy-dmz.intel.com:912}"
+AGENT_INSTALL_HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY:-}"
+AGENT_INSTALL_HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY:-}"
 AGENT_INSTALL_NO_PROXY="${AGENT_INSTALL_NO_PROXY:-}"
 AGENT_INSTALL_PROXY_PROBE_URL="${AGENT_INSTALL_PROXY_PROBE_URL:-${CUDA_KEYRING_URL}}"
 
@@ -120,11 +125,17 @@ sync_proxy_env_from_existing() {
 	fi
 }
 
-apply_agent_install_default_proxy() {
-	export http_proxy="${AGENT_INSTALL_HTTP_PROXY}"
-	export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}"
-	export HTTP_PROXY="${http_proxy}"
-	export HTTPS_PROXY="${https_proxy}"
+agent_install_proxy_urls_configured() {
+	[[ -n "${AGENT_INSTALL_HTTP_PROXY}" || -n "${AGENT_INSTALL_HTTPS_PROXY}" ]]
+}
+
+apply_agent_install_configured_proxy() {
+	if [[ -n "${AGENT_INSTALL_HTTP_PROXY}" ]]; then
+		export http_proxy="${AGENT_INSTALL_HTTP_PROXY}" HTTP_PROXY="${AGENT_INSTALL_HTTP_PROXY}"
+	fi
+	if [[ -n "${AGENT_INSTALL_HTTPS_PROXY}" ]]; then
+		export https_proxy="${AGENT_INSTALL_HTTPS_PROXY}" HTTPS_PROXY="${AGENT_INSTALL_HTTPS_PROXY}"
+	fi
 	if [[ -n "${AGENT_INSTALL_NO_PROXY}" ]]; then
 		export no_proxy="${AGENT_INSTALL_NO_PROXY}"
 		export NO_PROXY="${no_proxy}"
@@ -161,8 +172,12 @@ configure_network_proxy() {
 		return 0
 		;;
 	on)
-		apply_agent_install_default_proxy
-		log "Network proxy: mode=on — set http_proxy=${http_proxy}, https_proxy=${https_proxy}"
+		if agent_install_proxy_urls_configured; then
+			apply_agent_install_configured_proxy
+			log "Network proxy: mode=on — set http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>}"
+		else
+			log "WARN: mode=on but no proxy configured; export http_proxy/https_proxy (sudo -E) or set AGENT_INSTALL_HTTP_PROXY/AGENT_INSTALL_HTTPS_PROXY"
+		fi
 		return 0
 		;;
 	auto)
@@ -182,14 +197,19 @@ configure_network_proxy() {
 		return 0
 	fi
 
-	log "Network proxy: direct probe failed for ${probe}; trying default Intel DMZ proxy"
-	apply_agent_install_default_proxy
-	if network_https_reachable "${probe}" "0"; then
-		log "Network proxy: using defaults (http_proxy=${http_proxy}, https_proxy=${https_proxy})"
+	if ! agent_install_proxy_urls_configured; then
+		log "WARN: direct probe failed for ${probe} and no proxy configured; continuing direct (export http_proxy/https_proxy or set AGENT_INSTALL_HTTP_PROXY/AGENT_INSTALL_HTTPS_PROXY)"
 		return 0
 	fi
 
-	log "WARN: HTTPS still failing via default proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
+	log "Network proxy: direct probe failed for ${probe}; trying configured proxy"
+	apply_agent_install_configured_proxy
+	if network_https_reachable "${probe}" "0"; then
+		log "Network proxy: using configured proxy (http_proxy=${http_proxy:-<unset>}, https_proxy=${https_proxy:-<unset>})"
+		return 0
+	fi
+
+	log "WARN: HTTPS still failing via configured proxy; unsetting auto-proxy (set http_proxy/https_proxy manually)"
 	unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
 }
 

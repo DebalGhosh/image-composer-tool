@@ -337,32 +337,37 @@ but you must resize the filesystem yourself (e.g. `xfs_growfs /`, `btrfs filesys
 Corporate installs often need **`http_proxy` / `https_proxy`**; lab or edge hosts may use **direct** egress.
 Both scripts call **`configure_network_proxy`** at startup (before apt/curl/git).
 
+There are **no built-in proxy URLs**. The scripts use whatever proxy you provide via the standard `http_proxy` / `https_proxy` env or the `AGENT_INSTALL_*` variables, so they work unchanged inside or outside any corporate network.
+
 | `AGENT_INSTALL_PROXY_MODE` | Behavior |
 |----------------------------|----------|
-| **`auto`** (default) | If `http_proxy`/`https_proxy` (any case) already set → use them. Else **direct HTTPS probe**; if OK → **no proxy**. If probe fails → set Intel DMZ defaults (`911`/`912`). If proxy probe fails → WARN and continue without auto-proxy. |
-| **`on`** | If unset, always export `AGENT_INSTALL_HTTP_PROXY` / `AGENT_INSTALL_HTTPS_PROXY` (no direct probe). |
+| **`auto`** (default) | If `http_proxy`/`https_proxy` (any case) already set → use them. Else **direct HTTPS probe**; if OK → **no proxy**. If the probe fails and `AGENT_INSTALL_HTTP_PROXY`/`AGENT_INSTALL_HTTPS_PROXY` are set → use them; otherwise WARN and continue direct. |
+| **`on`** | If unset, export `AGENT_INSTALL_HTTP_PROXY` / `AGENT_INSTALL_HTTPS_PROXY` when they are set; if neither is set, WARN and set nothing. |
 | **`off`** | Never set proxy (direct only; use when a proxy would break local mirrors). |
 
 | Variable | Default |
 |----------|---------|
-| `AGENT_INSTALL_HTTP_PROXY` | `http://proxy-dmz.intel.com:911` |
-| `AGENT_INSTALL_HTTPS_PROXY` | `http://proxy-dmz.intel.com:912` |
+| `AGENT_INSTALL_HTTP_PROXY` | *(empty — set to your proxy, e.g. `http://proxy.example.com:911`)* |
+| `AGENT_INSTALL_HTTPS_PROXY` | *(empty — set to your proxy, e.g. `http://proxy.example.com:912`)* |
 | `AGENT_INSTALL_NO_PROXY` | *(empty)* |
 | `AGENT_INSTALL_PROXY_PROBE_URL` | Intel GPG URL (Intel script); CUDA keyring URL (NVIDIA script) |
 
-**sudo:** user proxies are often dropped unless preserved. Either `sudo -E`, export before `sudo`, or rely on **`auto`** / **`on`** so root gets defaults.
+**sudo:** user proxies are often dropped unless preserved. Either `sudo -E`, export before `sudo`, or pass `AGENT_INSTALL_HTTP_PROXY`/`AGENT_INSTALL_HTTPS_PROXY` explicitly so root gets your proxy.
 
-Example (user already has proxy, as on ArcherCity):
+Example (user already has proxy in the environment):
 
 ```bash
 env | grep -i proxy   # http_proxy / https_proxy set
 sudo -E FORCE=1 /opt/agent/agent-install.sh   # keeps env; script logs "using existing env"
 ```
 
-Example (force DMZ proxy on root either way):
+Example (force a specific proxy on root either way):
 
 ```bash
-sudo AGENT_INSTALL_PROXY_MODE=on /opt/agent/agent-install.sh
+sudo AGENT_INSTALL_PROXY_MODE=on \
+     AGENT_INSTALL_HTTP_PROXY=http://proxy.example.com:911 \
+     AGENT_INSTALL_HTTPS_PROXY=http://proxy.example.com:912 \
+     /opt/agent/agent-install.sh
 ```
 
 Example (lab, no proxy):

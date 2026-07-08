@@ -9,6 +9,8 @@
 # After flashing this image to a larger disk, grow rootfs to fill it:
 #   sudo /opt/agent/extend-storage.sh          # grow last partition + resize ext4 rootfs
 # FORCE=1 re-runs stamped custom steps. Requires network and mutable root (immutability off).
+# Behind a proxy? The scripts have no built-in proxy URLs: export http_proxy/https_proxy (sudo -E)
+#   or pass AGENT_INSTALL_HTTP_PROXY/AGENT_INSTALL_HTTPS_PROXY; do not rely on script defaults.
 # Package/step coverage: docs/tutorial/ubuntu24-agent-install-scripts.md
 
 metadata:
