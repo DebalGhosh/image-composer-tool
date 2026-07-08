@@ -53,6 +53,9 @@ type DiskConfig struct {
 	Size               string              `yaml:"size"`
 	PartitionTableType string              `yaml:"partitionTableType"`
 	Partitions         []PartitionInfo     `yaml:"partitions"`
+	// ExtendLastPartitionToFillDisk forces the final partition's end to "0"
+	// (consume all remaining disk space) when enabled.
+	ExtendLastPartitionToFillDisk bool `yaml:"extendLastPartitionToFillDisk,omitempty"`
 }
 
 type PackageRepository struct {
