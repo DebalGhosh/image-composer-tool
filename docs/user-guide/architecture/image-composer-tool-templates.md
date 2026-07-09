@@ -68,7 +68,7 @@ by providing your own template and configure or override the settings and
 values you want. The tool will internally merge the two to create the final
 template used for image composition.
 
-![image-templates](./assets/template.drawio.svg)
+![image-templates](../_assets/template.drawio.svg)
 
 ## How Templates Work
 
@@ -77,7 +77,7 @@ type (raw, ISO, initrd). When you provide a user template, the tool merges it
 with the matching default; your values override or extend the defaults. The
 merged result is validated against a JSON schema before the build begins.
 
-![image-templates](./assets/template.drawio.svg)
+![image-templates](../_assets/template.drawio.svg)
 
 Default templates live at:
 
