@@ -42,6 +42,11 @@ export const api = {
       body: JSON.stringify({ compose: req }),
     }),
 
+  // Cancel an in-flight build. The endpoint arrives with Story 3; until then the
+  // backend returns 404 and the caller surfaces that as a cancel failure.
+  cancelBuild: (buildId: string) =>
+    jsonFetch<void>(`/builds/${buildId}/cancel`, { method: 'POST' }),
+
   // SSE log stream URL for a build.
   logsUrl: (buildId: string) => `${BASE}/builds/${buildId}/logs`,
 }
