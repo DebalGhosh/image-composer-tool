@@ -18,6 +18,10 @@ export interface Combination {
   sku?: string
   platform: string
   os: string
+  // Optional kernel variant (e.g. "standard" | "rt"). Present only when a
+  // vertical/platform/OS offers a real-time template variant; the UI gates the
+  // kernel selector on its presence rather than hardcoding RT support.
+  kernel?: string
   imageType: string
   template: string
 }
@@ -35,6 +39,7 @@ export interface ComposeRequest {
   sku?: string
   platform: string
   os: string
+  kernel?: string
   imageType: string
 }
 

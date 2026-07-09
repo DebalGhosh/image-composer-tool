@@ -7,6 +7,7 @@ export interface Selection {
   sku: string
   platform: string
   os: string
+  kernel: string
   imageType: string
 }
 
@@ -22,6 +23,7 @@ const emptySelection: Selection = {
   sku: '',
   platform: '',
   os: '',
+  kernel: '',
   imageType: '',
 }
 
@@ -34,19 +36,26 @@ export const useStore = create<AppState>((set) => ({
       const selection = { ...state.selection, [key]: value }
       // Reset downstream fields when an upstream one changes, so the cascade
       // never leaves an invalid combination selected.
+      // Cascade order: vertical → sku → platform → os → kernel → imageType.
       if (key === 'vertical') {
         selection.sku = ''
         selection.platform = ''
         selection.os = ''
+        selection.kernel = ''
         selection.imageType = ''
       } else if (key === 'sku') {
         selection.platform = ''
         selection.os = ''
+        selection.kernel = ''
         selection.imageType = ''
       } else if (key === 'platform') {
         selection.os = ''
+        selection.kernel = ''
         selection.imageType = ''
       } else if (key === 'os') {
+        selection.kernel = ''
+        selection.imageType = ''
+      } else if (key === 'kernel') {
         selection.imageType = ''
       }
       return { selection }
@@ -90,6 +99,7 @@ export function cascadingOptions(
   skus: DropdownOption[]
   platforms: DropdownOption[]
   oses: DropdownOption[]
+  kernels: DropdownOption[]
   imageTypes: DropdownOption[]
   matched: Combination | null
 } {
@@ -114,11 +124,25 @@ export function cascadingOptions(
     }),
     manifest.targets,
   )
+
+  // Kernel is an optional dimension: only combinations that carry a kernel value
+  // contribute. When none do, kernels is empty and the UI omits the selector —
+  // so RT vs standard is surfaced only where the metadata actually offers it.
+  const kernelIds = distinct(c, 'kernel', {
+    vertical: selection.vertical,
+    sku: selection.sku,
+    platform: selection.platform,
+    os: selection.os,
+  })
+  const kernelLabels: Record<string, string> = { standard: 'Standard', rt: 'Real-Time' }
+  const kernels = kernelIds.map((id) => ({ id, label: kernelLabels[id] ?? id }))
+
   const imageTypeIds = distinct(c, 'imageType', {
     vertical: selection.vertical,
     sku: selection.sku,
     platform: selection.platform,
     os: selection.os,
+    ...(kernels.length > 0 ? { kernel: selection.kernel } : {}),
   })
   const imageTypes = imageTypeIds.map((id) => ({ id, label: id.toUpperCase() }))
 
@@ -129,8 +153,9 @@ export function cascadingOptions(
         (x.sku || '') === selection.sku &&
         x.platform === selection.platform &&
         x.os === selection.os &&
+        (x.kernel || '') === selection.kernel &&
         x.imageType === selection.imageType,
     ) ?? null
 
-  return { verticals, skus, platforms, oses, imageTypes, matched }
+  return { verticals, skus, platforms, oses, kernels, imageTypes, matched }
 }

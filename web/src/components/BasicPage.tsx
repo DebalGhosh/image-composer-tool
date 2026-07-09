@@ -104,12 +104,24 @@ export function BasicPage() {
           disabled={!selection.platform}
           onChange={(v) => setSel('os', v)}
         />
+        {/* Kernel selector appears only when the manifest offers kernel variants
+            (e.g. standard vs real-time) for the current selection. */}
+        {opts.kernels.length > 0 && (
+          <Select
+            label="Kernel"
+            placeholder="-- Select Kernel --"
+            value={selection.kernel}
+            options={opts.kernels}
+            disabled={!selection.os}
+            onChange={(v) => setSel('kernel', v)}
+          />
+        )}
         <Select
           label="Image Type"
           placeholder="-- Select Image Type --"
           value={selection.imageType}
           options={opts.imageTypes}
-          disabled={!selection.os}
+          disabled={!selection.os || (opts.kernels.length > 0 && !selection.kernel)}
           onChange={(v) => setSel('imageType', v)}
         />
 
