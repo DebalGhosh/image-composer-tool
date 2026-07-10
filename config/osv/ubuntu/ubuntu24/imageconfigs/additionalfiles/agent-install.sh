@@ -527,11 +527,14 @@ run_once_step_agent_python_venv() {
 			langgraph \\
 			openai \\
 			openai-agents
+<<<<<<< HEAD
 		if [[ '${INSTALL_PYTORCH_XPU}' == '1' ]]; then
 			# PyTorch Intel GPU (XPU) backend; wheels bundle the needed runtime libs.
 			'${AGENT_VENV}/bin/pip' install --index-url '${PYTORCH_XPU_INDEX_URL}' \\
 				torch torchvision torchaudio
 		fi
+=======
+>>>>>>> main
 	"
 }
 
