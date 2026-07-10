@@ -70,6 +70,124 @@ disk:
       mountPoint: /
       mountOptions: defaults
 
+# packageRepositories:
+#   # Intel overlay repository (aligned with installer script)
+#   - codename: "noble"
+#     url: "https://download.01.org/intel-linux-overlay/ubuntu"
+#     pkey: "https://download.01.org/intel-linux-overlay/ubuntu/E6FA98203588250569758E97D176E3162086EE4C.gpg"
+#     component: "multimedia main non-free kernels"
+#     priority: 2000
+#     allowPackages:
+#       - libigfxcmrt-dev
+#       - libigfxcmrt7
+#       - gir1.2-gst-plugins-bad-1.0
+#       - gir1.2-gst-plugins-base-1.0
+#       - gir1.2-gstreamer-1.0
+#       - gir1.2-gst-rtsp-server-1.0
+#       - gstreamer1.0-alsa
+#       - gstreamer1.0-gl
+#       - gstreamer1.0-gtk3
+#       - gstreamer1.0-opencv
+#       - gstreamer1.0-plugins-bad
+#       - gstreamer1.0-plugins-bad-apps
+#       - gstreamer1.0-plugins-base
+#       - gstreamer1.0-plugins-base-apps
+#       - gstreamer1.0-plugins-good
+#       - gstreamer1.0-plugins-ugly
+#       - gstreamer1.0-pulseaudio
+#       - gstreamer1.0-qt5
+#       - gstreamer1.0-rtsp
+#       - gstreamer1.0-tools
+#       - gstreamer1.0-x
+#       - intel-media-va-driver
+#       - libgstrtspserver-1.0-dev
+#       - libgstrtspserver-1.0-0
+#       - libgstreamer-gl1.0-0
+#       - libgstreamer-opencv1.0-0
+#       - libgstreamer-plugins-bad1.0-0
+#       - libgstreamer-plugins-bad1.0-dev
+#       - libgstreamer-plugins-base1.0-0
+#       - libgstreamer-plugins-base1.0-dev
+#       - libgstreamer-plugins-good1.0-0
+#       - libgstreamer1.0-0
+#       - libgstreamer1.0-dev
+#       - libigdgmm-dev
+#       - libigdgmm12
+#       - libmfx-gen1.2
+#       - libva-dev
+#       - libva-drm2
+#       - libva-glx2
+#       - libva-wayland2
+#       - libva-x11-2
+#       - libva2
+#       - libwayland-bin
+#       - libwayland-client0
+#       - libwayland-cursor0
+#       - libwayland-dev
+#       - libwayland-doc
+#       - libwayland-egl-backend-dev
+#       - libwayland-egl1
+#       - libwayland-server0
+#       - linux-firmware
+#       - mesa-vdpau-drivers
+#       - mesa-vulkan-drivers
+#       - libvpl-dev
+#       - libvpl-tools
+#       - libmfx-gen-dev
+#       - onevpl-tools
+#       - qemu-block-extra
+#       - qemu-guest-agent
+#       - qemu-system
+#       - qemu-system-arm
+#       - qemu-system-common
+#       - qemu-system-data
+#       - qemu-system-gui
+#       - qemu-system-mips
+#       - qemu-system-misc
+#       - qemu-system-ppc
+#       - qemu-system-s390x
+#       - qemu-system-sparc
+#       - qemu-system-x86
+#       - qemu-user
+#       - qemu-user-binfmt
+#       - qemu-utils
+#       - va-driver-all
+#       - vainfo
+#       - weston
+#       - ffmpeg
+#       - wayland-protocols
+#       - linuxptp
+#       - qemu-system-modules-opengl
+#       - spice-client-gtk
+#       - util-linux-extra
+#       - dbus-x11
+#       - sg3-utils
+#       - linux-headers-6.18-intel
+#       - linux-image-6.18-intel
+#       # overlay dependencies
+#       - libvpl2
+#       - libspice-client-glib-2.0-8
+#       - libspice-client-gtk-3.0-5
+#       - spice-client-glib-usb-acl-helper
+#       - libavcodec62
+#       - libavformat62
+#       - libavutil60
+#       - libavdevice62
+#       - libavfilter11
+#       - libswresample6
+#       - libswscale9
+#       - libweston-10-0
+#       - dnsmasq-base
+#       # additional PTL packages
+#       - xdp-tools
+#       - rpc-go
+#       - lms 
+#       - metee
+#       - libxdp-dev
+#       - libxdp1
+#       - intel-media-va-driver-non-free
+#       - spice-client-gtk
+      
 systemConfig:
   name: edge-agent
   description: Edge Ubuntu image with Intel and NVIDIA agent install scripts under /opt/agent
@@ -103,6 +221,17 @@ systemConfig:
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
       - linux-image-generic-hwe-24.04
+  # kernel:
+  #   version: "260427t075939z-r2"
+  #   # cmdline: "xe.max_vfs=7 xe.force_probe=* udmabuf.list_limit=8192 console=tty0 console=ttyS0,115200n8"
+  #   # enableExtraModules: "intel_vpu uas"
+
+  #   cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
+  #   enableExtraModules: "intel_vpu uas simpledrm"
+    
+  #   packages:
+  #       - linux-image-6.18-intel_260427t075939z-r2
+  #       - linux-headers-6.18-intel_260427t075939z-r2
 
   users:
     - name: user

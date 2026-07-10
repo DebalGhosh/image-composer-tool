@@ -865,6 +865,33 @@ install_apt_packages() {
 	log_installed_intel_versions
 }
 
+# UKI from image-composer lands at ESP/EFI/Linux/linux.efi (see internal/image/imageos).
+find_linux_uki_efi() {
+	local esp candidate
+	for esp in "$(bootctl --print-esp-path 2>/dev/null || true)" /boot/efi /efi; do
+		[[ -z "${esp}" || ! -d "${esp}" ]] && continue
+		candidate="${esp%/}/EFI/Linux/linux.efi"
+		if [[ -f "${candidate}" ]]; then
+			echo "${candidate}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+set_systemd_boot_default_linux_efi() {
+	local uki_path
+	if ! command -v bootctl >/dev/null 2>&1; then
+		return 0
+	fi
+	if ! uki_path="$(find_linux_uki_efi)"; then
+		log "systemd-boot: skip set-default (EFI/Linux/linux.efi not found on ESP)"
+		return 0
+	fi
+	log "systemd-boot: ${uki_path} present; set default entry to linux.efi"
+	sudo bootctl set-default linux.efi
+}
+
 main() {
 	require_root
 	mkdir -p "$(dirname "${LOG_FILE}")" "${STAMP_DIR}" /opt/agent
@@ -893,6 +920,8 @@ main() {
 	fi
 
 	run_once_step_agent_python_venv
+
+	set_systemd_boot_default_linux_efi
 
 	log "=== ${SCRIPT_NAME} complete ==="
 	log "Python agent venv: ${AGENT_VENV}/bin/activate"
