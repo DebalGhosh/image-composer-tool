@@ -566,3 +566,41 @@ func TestHandleBuildLogsCompletedBuild(t *testing.T) {
 		t.Errorf("missing complete event: %q", out)
 	}
 }
+
+// --- ICT binary discovery ---
+
+func TestDiscoverICTBinary(t *testing.T) {
+	// Prefers ./build/image-composer-tool when present.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.MkdirAll("build", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("build/image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
+		t.Errorf("with build/ present, got %q, want ./build/image-composer-tool", got)
+	}
+
+	// Falls back to the repo-root binary when ./build/ has none.
+	dir2 := t.TempDir()
+	t.Chdir(dir2)
+	if err := os.WriteFile("image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverICTBinary(); got != "./image-composer-tool" {
+		t.Errorf("with only root binary, got %q, want ./image-composer-tool", got)
+	}
+
+	// With neither present (and not on PATH), returns the conventional path.
+	dir3 := t.TempDir()
+	t.Chdir(dir3)
+	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
+		// Note: if a real image-composer-tool is on the test host's PATH, this
+		// branch returns that instead — accept an absolute path too.
+		if !filepath.IsAbs(got) {
+			t.Errorf("with nothing present, got %q, want ./build/... or an abs PATH hit", got)
+		}
+	}
+}
