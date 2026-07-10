@@ -3,16 +3,20 @@ import { useStore, cascadingOptions } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
-import { BuildView } from './BuildView'
 
-export function BasicPage() {
+interface BasicPageProps {
+  // Called with the new build id when a build starts; the parent switches to
+  // the Build Image panel.
+  onBuildStarted: (buildId: string) => void
+}
+
+export function BasicPage({ onBuildStarted }: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [reviewOpen, setReviewOpen] = useState(false)
-  const [buildId, setBuildId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -49,7 +53,7 @@ export function BasicPage() {
       setBusy(true)
       setError(null)
       const accepted = await api.startBuild(selection)
-      setBuildId(accepted.buildId)
+      onBuildStarted(accepted.buildId)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -176,8 +180,6 @@ export function BasicPage() {
           </span>
         )}
       </div>
-
-      {buildId && <BuildView buildId={buildId} />}
     </div>
   )
 }
