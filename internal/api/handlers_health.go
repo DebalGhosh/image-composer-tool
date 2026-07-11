@@ -13,13 +13,13 @@ type healthResponse struct {
 
 // engineStatsResponse matches the OpenAPI EngineStats schema.
 type engineStatsResponse struct {
-	Initialized    bool             `json:"initialized"`
-	IndexedAt      time.Time        `json:"indexed_at"`
-	TemplateCount  int              `json:"template_count"`
-	Provider       string           `json:"provider"`
-	EmbeddingModel string           `json:"embedding_model"`
-	CacheEnabled   bool             `json:"cache_enabled"`
-	CacheStats     *cacheStatsJSON  `json:"cache_stats"`
+	Initialized    bool            `json:"initialized"`
+	IndexedAt      time.Time       `json:"indexed_at"`
+	TemplateCount  int             `json:"template_count"`
+	Provider       string          `json:"provider"`
+	EmbeddingModel string          `json:"embedding_model"`
+	CacheEnabled   bool            `json:"cache_enabled"`
+	CacheStats     *cacheStatsJSON `json:"cache_stats"`
 }
 
 // cacheStatsJSON matches the OpenAPI CacheStats schema.

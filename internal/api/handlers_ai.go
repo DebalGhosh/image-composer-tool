@@ -109,8 +109,8 @@ func handleQuery(s *Server) http.HandlerFunc {
 
 		resp := queryResponse{
 			YAML:            yaml,
-			SearchResults:   []searchResultJSON{},  // Populated in future when Generate returns richer data
-			SourceTemplates: []string{},             // Populated in future when Generate returns richer data
+			SearchResults:   []searchResultJSON{}, // Populated in future when Generate returns richer data
+			SourceTemplates: []string{},           // Populated in future when Generate returns richer data
 		}
 
 		respondJSON(w, http.StatusOK, resp)

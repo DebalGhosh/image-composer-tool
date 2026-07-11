@@ -82,20 +82,20 @@ func respondError(w http.ResponseWriter, statusCode int, code, message string, d
 // These are part of the API stability contract and will not change within
 // a version.
 const (
-	ErrCodeSessionNotFound    = "SESSION_NOT_FOUND"
-	ErrCodeSessionExpired     = "SESSION_EXPIRED"
-	ErrCodeQueryRequired      = "QUERY_REQUIRED"
-	ErrCodeQueryTooLong       = "QUERY_TOO_LONG"
-	ErrCodeSearchFailed       = "SEARCH_FAILED"
-	ErrCodeEngineUnavailable  = "ENGINE_UNAVAILABLE"
-	ErrCodeValidationFailed   = "VALIDATION_FAILED"
-	ErrCodeTemplateNotFound   = "TEMPLATE_NOT_FOUND"
-	ErrCodeTemplateExists     = "TEMPLATE_EXISTS"
-	ErrCodeGenerationFailed   = "GENERATION_FAILED"
-	ErrCodeProviderUnavail    = "PROVIDER_UNAVAILABLE"
-	ErrCodeBuildFailed        = "BUILD_FAILED"
-	ErrCodeBuildNotFound      = "BUILD_NOT_FOUND"
-	ErrCodeRateLimited        = "RATE_LIMITED"
+	ErrCodeSessionNotFound   = "SESSION_NOT_FOUND"
+	ErrCodeSessionExpired    = "SESSION_EXPIRED"
+	ErrCodeQueryRequired     = "QUERY_REQUIRED"
+	ErrCodeQueryTooLong      = "QUERY_TOO_LONG"
+	ErrCodeSearchFailed      = "SEARCH_FAILED"
+	ErrCodeEngineUnavailable = "ENGINE_UNAVAILABLE"
+	ErrCodeValidationFailed  = "VALIDATION_FAILED"
+	ErrCodeTemplateNotFound  = "TEMPLATE_NOT_FOUND"
+	ErrCodeTemplateExists    = "TEMPLATE_EXISTS"
+	ErrCodeGenerationFailed  = "GENERATION_FAILED"
+	ErrCodeProviderUnavail   = "PROVIDER_UNAVAILABLE"
+	ErrCodeBuildFailed       = "BUILD_FAILED"
+	ErrCodeBuildNotFound     = "BUILD_NOT_FOUND"
+	ErrCodeRateLimited       = "RATE_LIMITED"
 )
 
 // maxQueryLength is the maximum allowed query length (from OpenAPI spec).
