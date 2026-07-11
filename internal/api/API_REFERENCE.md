@@ -1,5 +1,5 @@
 # API Package Reference
-NOTE: This is a temporary file to just get rough idea and reference about what the temporary structure of the project backend looks like. This is not a final source of truth reference document and may contain minor errors-NB
+NOTE: This is a temporary file to just get rough idea and reference about what the temporary structure of the project backend looks like. This is not a final source of truth reference document and may contain minor errors for now. Will be updated in future as project progresses-NB
 
 This document serves as a reference for the `internal/api` package, which provides the HTTP web server layer for the Image Composer Tool. It explains the purpose of each file, how they coordinate to handle requests, and the current development status.
 
@@ -35,9 +35,8 @@ When a user or web browser sends a request, the files coordinate in the followin
 
 ---
 
-## What is Done (Phase 1)
+## What is Done (Phase 1 and Phase 2)
 
-NOTE: Some edge cases still do not work or need refinement-NB
 
 The core scaffolding and foundational architecture have been completed. The following OpenAPI specifications are fully implemented and functional:
 
@@ -48,7 +47,11 @@ The core scaffolding and foundational architecture have been completed. The foll
 *   `GET /api/v1/ai/search` (Semantic search over templates)
 *   `POST /api/v1/ai/query` (Standard, non-streaming template generation)
 
+
 **Fixes Applied:** The server `WriteTimeout` was increased from 60 seconds to 5 minutes to accommodate large local LLMs (like `llama3.1:8b`) that require longer generation times.
+
+**Phase 2: Streaming Generation**
+    *   Implemented `GET /api/v1/ai/stream` to use Server-Sent Events (SSE). This allows real-time streaming of generation tokens to the frontend UI.
 
 ---
 
@@ -56,8 +59,7 @@ The core scaffolding and foundational architecture have been completed. The foll
 
 The API is built in phases according to the Architecture Decision Record (ADR). The following features are scheduled for future implementation:
 
-*   **Phase 2: Streaming Generation**
-    *   Implement `GET /api/v1/ai/stream` to use Server-Sent Events (SSE). This will allow real-time streaming of generation tokens to the frontend UI.
+
 *   **Phase 3: Conversational Sessions**
     *   Implement Session Manager.
     *   Add endpoints: `POST /api/v1/sessions`, `GET /api/v1/sessions/{id}`, `DELETE /api/v1/sessions/{id}`.
