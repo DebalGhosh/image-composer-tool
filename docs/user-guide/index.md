@@ -68,8 +68,8 @@ See the [Quick Start guide](./get-started/quick-start.md) to build your first im
 :caption: Get Started
 
 Quick Start <./get-started/quick-start.md>
-Installation <./get-started/installation.md>
 Prerequisites <./get-started/prerequisites.md>
+Installation <./get-started/installation.md>
 Usage Guide <./get-started/usage-guide.md>
 AI Template Generation (RAG) <./get-started/ai-template-generation.md>
 
