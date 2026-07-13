@@ -296,7 +296,7 @@ overlayPolicy:
 ```
 
 A complete example lives at
-[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](../../image-templates/ubuntu24-x86_64-overlay-raw.yml).
+[`image-templates/ubuntu24-x86_64-overlay-raw.yml`](https://github.com/open-edge-platform/image-composer-tool/blob/main/image-templates/ubuntu24-x86_64-overlay-raw.yml).
 
 ---
 
