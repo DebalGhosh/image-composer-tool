@@ -13,19 +13,19 @@ cd image-composer-tool
 go build -buildmode=pie -ldflags "-s -w" ./cmd/image-composer-tool
 ```
 
-2. Install the required system tools:
+   Alternatively, run it directly without building a binary:
+
+   ```bash
+   go run ./cmd/image-composer-tool --help
+   ```
+
+1. Install the required system tools:
 
 ```bash
 sudo apt install systemd-ukify mmdebstrap
 ```
 
-Alternatively, run the commnad below:
-
-```bash
-go run ./cmd/image-composer-tool --help
-```
-
-3. Compose an image using one of the templates:
+1. Compose an image using one of the templates:
 
 ```bash
 sudo -E ./image-composer-tool build image-templates/azl3-x86_64-edge-raw.yml
