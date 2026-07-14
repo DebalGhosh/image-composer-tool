@@ -61,7 +61,7 @@ export default function App() {
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
     { id: 'advanced', label: 'Advanced', enabled: false },
-    { id: 'builds', label: 'Build Image', enabled: true },
+    { id: 'builds', label: 'Compose Image', enabled: true },
   ]
 
   return (
@@ -137,9 +137,9 @@ export default function App() {
 function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () => void }) {
   if (status === 'idle') return null
   const cfg = {
-    running: { color: 'bg-yellow-400', pulse: true,  label: 'Build in progress' },
-    success: { color: 'bg-green-400',  pulse: false, label: 'Build completed' },
-    failed:  { color: 'bg-red-500',    pulse: false, label: 'Build failed' },
+    running: { color: 'bg-yellow-400', pulse: true,  label: 'Compose in progress' },
+    success: { color: 'bg-green-400',  pulse: false, label: 'Compose completed' },
+    failed:  { color: 'bg-red-500',    pulse: false, label: 'Compose failed' },
   }[status]
   return (
     <button

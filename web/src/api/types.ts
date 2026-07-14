@@ -92,6 +92,17 @@ export interface BuildDetails {
   workDir: string
   cacheDir: string
   summary?: ComposeSummary
+  hasLogFile: boolean
+  errMsg?: string
+}
+
+// One row in the compose history list.
+export interface HistoryItem {
+  id: string
+  status: string
+  template: string
+  createdAt: string
+  summary?: ComposeSummary
 }
 
 export interface BuildComplete {

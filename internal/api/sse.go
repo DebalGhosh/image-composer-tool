@@ -15,7 +15,7 @@ import (
 // terminal `complete` or `error` event.
 func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.tracker.get(id)
+	b, ok := s.getBuild(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return

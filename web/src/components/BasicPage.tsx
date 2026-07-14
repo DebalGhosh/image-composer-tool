@@ -68,7 +68,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-6">
+    <div className="mx-auto max-w-screen-2xl p-6">
       <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
       <p className="mb-5 text-sm text-slate-500">
         Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied
@@ -192,16 +192,16 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           disabled={!complete || busy || buildInProgress}
           onClick={onBuild}
         >
-          {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+          {busy ? 'Starting…' : buildInProgress ? 'Composing…' : 'Compose Image'}
         </button>
         {!complete && !buildInProgress && (
           <span className="ml-3 text-sm text-slate-500">
-            Complete all selections to build.
+            Complete all selections to compose.
           </span>
         )}
         {buildInProgress && (
           <span className="ml-3 text-sm text-amber-600">
-            A build is already in progress. Switch to the Build Image tab to monitor it.
+            A compose is already in progress. Switch to the Compose Image tab to monitor it.
           </span>
         )}
       </div>

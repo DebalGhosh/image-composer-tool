@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -43,12 +44,15 @@ type artifact struct {
 // once at construction and are safe to read without the lock.
 type build struct {
 	ID           string
+	RootDir      string // per-build root (parent of work/ and cache/)
 	WorkDir      string
 	CacheDir     string
 	Template     string          // template file name (for display)
 	TemplatePath string          // resolved on-disk path (for download)
 	Command      string          // exact command run, for the UI's troubleshoot panel
 	Summary      *composeSummary // image configuration summary, nil for YAML builds
+	CreatedAt    time.Time       // when the compose was started
+	LogFile      string          // on-disk log file path, written at finish
 	done         chan struct{}   // closed when the build finishes
 
 	mu        sync.Mutex
@@ -97,6 +101,17 @@ func (t *buildTracker) get(id string) (*build, bool) {
 	return b, ok
 }
 
+// all returns a snapshot slice of the currently tracked (in-memory) builds.
+func (t *buildTracker) all() []*build {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]*build, 0, len(t.builds))
+	for _, b := range t.builds {
+		out = append(out, b)
+	}
+	return out
+}
+
 // appendLog records a log line and is safe for concurrent use.
 func (b *build) appendLog(line string) {
 	b.mu.Lock()
@@ -139,6 +154,7 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	buildRoot := filepath.Join(s.cfg.WorkDir, "builds", id)
 	workDir := filepath.Join(buildRoot, "work")
 	cacheDir := filepath.Join(buildRoot, "cache")
+	createdAt := time.Now()
 	// 0700: build logs and artifact metadata may be sensitive; keep them private.
 	for _, d := range []string{workDir, cacheDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -173,15 +189,23 @@ func (s *Server) handleStartBuild(w http.ResponseWriter, r *http.Request) {
 	b := &build{
 		ID:           id,
 		status:       statusRunning,
+		RootDir:      buildRoot,
 		WorkDir:      workDir,
 		CacheDir:     cacheDir,
 		Template:     templateName,
 		TemplatePath: templatePath,
 		Command:      name + " " + strings.Join(cmdArgs, " "),
 		Summary:      summary,
+		CreatedAt:    createdAt,
 		done:         make(chan struct{}),
 	}
 	s.tracker.add(b)
+
+	// Persist the initial record so the build shows in history immediately (and
+	// survives a restart mid-build as a stale "running" entry).
+	if err := b.writeMeta(); err != nil {
+		logger.Logger().Warnf("build %s: writing initial meta: %v", id, err)
+	}
 
 	go s.runBuild(b, name, cmdArgs)
 
@@ -325,13 +349,33 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 	b.finish(statusSuccess, arts, "")
 }
 
-// finish records the build's terminal status, artifacts, and error under lock.
+// finish records the build's terminal status, artifacts, and error under lock,
+// persists the buffered logs to a file (so past builds can offer a log download
+// without keeping logs in memory), then writes meta.json so the compose history
+// reflects the final outcome across restarts.
 func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.status = status
 	b.artifacts = arts
 	b.errMsg = errMsg
+	b.mu.Unlock()
+
+	// Persist logs to <root>/compose.log for later download.
+	if b.RootDir != "" {
+		logPath := filepath.Join(b.RootDir, "compose.log")
+		content := strings.Join(b.snapshotLogs(), "\n")
+		if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+			logger.Logger().Warnf("build %s: writing log file: %v", b.ID, err)
+		} else {
+			b.mu.Lock()
+			b.LogFile = logPath
+			b.mu.Unlock()
+		}
+	}
+
+	if err := b.writeMeta(); err != nil {
+		logger.Logger().Warnf("build %s: writing final meta: %v", b.ID, err)
+	}
 }
 
 // parseArtifacts extracts the artifact list from ICT's build output. ICT prints

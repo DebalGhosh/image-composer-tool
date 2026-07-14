@@ -25,13 +25,15 @@ type buildDetails struct {
 	WorkDir     string          `json:"workDir"`
 	CacheDir    string          `json:"cacheDir"`
 	Summary     *composeSummary `json:"summary,omitempty"`
+	HasLogFile  bool            `json:"hasLogFile"` // a downloadable log file exists on disk
+	ErrMsg      string          `json:"errMsg,omitempty"`
 }
 
 // handleBuildDetails returns the command and paths for a build so the UI can show
 // exactly what ran and offer the template for download.
 func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.tracker.get(id)
+	b, ok := s.getBuild(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
@@ -46,14 +48,40 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		WorkDir:     b.WorkDir,
 		CacheDir:    b.CacheDir,
 		Summary:     b.Summary,
+		HasLogFile:  b.LogFile != "" && fileExists(b.LogFile),
+		ErrMsg:      res.errMsg,
 	})
+}
+
+// fileExists reports whether path names an existing regular file.
+func fileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
+}
+
+// handleBuildLogFile serves the persisted compose log as a download. Available
+// once a build has finished (the log file is written at completion).
+func (s *Server) handleBuildLogFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	b, ok := s.getBuild(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
+		return
+	}
+	if b.LogFile == "" || !fileExists(b.LogFile) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "no log file for this build")
+		return
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "compose-"+id+".log"))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	http.ServeFile(w, r, b.LogFile)
 }
 
 // handleBuildTemplate serves the exact template file that was built, as a
 // download, so the operator can inspect or reuse the resolved YAML.
 func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	b, ok := s.tracker.get(id)
+	b, ok := s.getBuild(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
@@ -85,7 +113,7 @@ func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBuildArtifactDownload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	name := r.PathValue("name")
-	b, ok := s.tracker.get(id)
+	b, ok := s.getBuild(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return

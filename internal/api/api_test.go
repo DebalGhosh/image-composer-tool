@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testManifest returns a small in-memory manifest for handler tests.
@@ -700,6 +701,7 @@ func TestHandleBuildArtifactDownload(t *testing.T) {
 	}
 	b := &build{
 		ID:      "a1",
+		RootDir: workDir, // so finish()'s writeMeta stays in the temp dir
 		WorkDir: workDir,
 		done:    make(chan struct{}),
 	}
@@ -736,5 +738,78 @@ func TestHandleBuildArtifactDownload(t *testing.T) {
 	s.handleBuildArtifactDownload(rr3, req3)
 	if rr3.Code != http.StatusNotFound {
 		t.Errorf("missing build status = %d, want 404", rr3.Code)
+	}
+}
+
+// --- compose history (list + disk hydration) ---
+
+func TestHistoryListAndHydrate(t *testing.T) {
+	s := newTestServer(t)
+
+	// A live in-memory build (running).
+	live := &build{
+		ID:        "live1",
+		RootDir:   filepath.Join(s.cfg.WorkDir, "builds", "live1"),
+		Template:  "robotics.yml",
+		Summary:   &composeSummary{Vertical: "robotics"},
+		CreatedAt: time.Now(),
+		done:      make(chan struct{}),
+	}
+	live.status = statusRunning
+	s.tracker.add(live)
+
+	// A past build present only on disk via meta.json (not in memory).
+	pastRoot := filepath.Join(s.cfg.WorkDir, "builds", "past1")
+	if err := os.MkdirAll(pastRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := buildMeta{
+		ID:        "past1",
+		Status:    "success",
+		Template:  "retail.yml",
+		Command:   "ict build retail.yml",
+		CreatedAt: time.Now().Add(-time.Hour),
+		Summary:   &composeSummary{Vertical: "retail"},
+		Artifacts: []artifact{{Name: "img.iso", Type: "image", Path: filepath.Join(pastRoot, "img.iso")}},
+	}
+	data, _ := json.MarshalIndent(meta, "", "  ")
+	if err := os.WriteFile(metaPath(pastRoot), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// List returns both, newest-first (live is newer).
+	rr := httptest.NewRecorder()
+	s.handleListBuilds(rr, httptest.NewRequest(http.MethodGet, "/api/v1/builds", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var out struct {
+		Builds []historyItem `json:"builds"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Builds) != 2 {
+		t.Fatalf("builds = %d, want 2: %+v", len(out.Builds), out.Builds)
+	}
+	if out.Builds[0].ID != "live1" || out.Builds[1].ID != "past1" {
+		t.Errorf("order = %s,%s want live1,past1", out.Builds[0].ID, out.Builds[1].ID)
+	}
+
+	// getBuild hydrates the past build from disk (not in tracker).
+	if _, ok := s.tracker.get("past1"); ok {
+		t.Fatal("past1 should not be in the tracker")
+	}
+	hb, ok := s.getBuild("past1")
+	if !ok {
+		t.Fatal("getBuild past1 = not found, want hydrated from disk")
+	}
+	if hb.Template != "retail.yml" || hb.snapshot().status != statusSuccess {
+		t.Errorf("hydrated build wrong: %+v", hb)
+	}
+
+	// Unknown build id is not found.
+	if _, ok := s.getBuild("does-not-exist"); ok {
+		t.Error("getBuild unknown id = found, want not found")
 	}
 }
