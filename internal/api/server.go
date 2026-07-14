@@ -3,7 +3,7 @@
 
 // Package api implements the HTTP backend for the ICT web UI. It serves a
 // configuration manifest, resolves pre-authored templates, and triggers image
-// builds via the ICT binary — see docs/architecture/adr-web-ui-tech-stack.md.
+// builds via the ICT binary — see docs/architecture-decision-record/adr-web-ui-tech-stack.md.
 package api
 
 import (
