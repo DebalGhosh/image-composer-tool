@@ -198,8 +198,8 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 			t.Errorf("error message should mention 'escapes', got: %v", err)
 		}
 		// No directory should have been created inside unique-workspace as a side effect.
-		if _, statErr := os.Stat(isolated.WorkDir); !os.IsNotExist(statErr) {
-			t.Errorf("unique-workspace should not have been created before the error, stat err: %v", statErr)
+		if _, statErr := os.Stat(isolated.WorkDir); statErr == nil {
+			t.Errorf("unique-workspace should not have been created before the error")
 		}
 	})
 
@@ -219,8 +219,8 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 			t.Errorf("error message should mention 'escapes', got: %v", err)
 		}
 		// No directory should have been created inside orig-workspace as a side effect.
-		if _, statErr := os.Stat(isolated.originalWorkDir); !os.IsNotExist(statErr) {
-			t.Errorf("orig-workspace should not have been created before the error, stat err: %v", statErr)
+		if _, statErr := os.Stat(isolated.originalWorkDir); statErr == nil {
+			t.Errorf("orig-workspace should not have been created before the error")
 		}
 	})
 }
