@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	fileutil "github.com/open-edge-platform/image-composer-tool/internal/utils/file"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -30,11 +31,22 @@ type Isolated struct {
 // It deliberately does not touch global state: pointing the build at the returned
 // directories, and restoring afterwards, is the caller's responsibility.
 func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(), error) {
-	uniqueCacheDir, err := os.MkdirTemp(filepath.Dir(originalCacheDir), "ict-nocache-cache-*")
+	cacheDirParent := filepath.Dir(originalCacheDir)
+	if err := os.MkdirAll(cacheDirParent, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("creating cache parent directory %s: %w", cacheDirParent, err)
+	}
+	uniqueCacheDir, err := os.MkdirTemp(cacheDirParent, "ict-nocache-cache-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating unique cache directory: %w", err)
 	}
-	uniqueWorkDir, err := os.MkdirTemp(filepath.Dir(originalWorkDir), "ict-nocache-workspace-*")
+	workDirParent := filepath.Dir(originalWorkDir)
+	if err := os.MkdirAll(workDirParent, 0o755); err != nil {
+		if removeErr := os.RemoveAll(uniqueCacheDir); removeErr != nil {
+			logger.Logger().Warnf("failed to remove unique cache directory %s: %v", uniqueCacheDir, removeErr)
+		}
+		return nil, nil, fmt.Errorf("creating workspace parent directory %s: %w", workDirParent, err)
+	}
+	uniqueWorkDir, err := os.MkdirTemp(workDirParent, "ict-nocache-workspace-*")
 	if err != nil {
 		if removeErr := os.RemoveAll(uniqueCacheDir); removeErr != nil {
 			logger.Logger().Warnf("failed to remove unique cache directory %s: %v", uniqueCacheDir, removeErr)
@@ -79,6 +91,9 @@ func (isolated *Isolated) KeepWorkspace() {
 // image build directory was produced.
 func (isolated *Isolated) PreserveOutput(providerID, configName string) error {
 	sourceImageDir := filepath.Join(isolated.WorkDir, providerID, "imagebuild", configName)
+	if !isSubPath(isolated.WorkDir, sourceImageDir) {
+		return fmt.Errorf("image output source path %q escapes isolated workspace %q", sourceImageDir, isolated.WorkDir)
+	}
 	if _, err := os.Stat(sourceImageDir); err != nil {
 		if os.IsNotExist(err) {
 			return nil // no image build directory produced; nothing to preserve
@@ -87,6 +102,9 @@ func (isolated *Isolated) PreserveOutput(providerID, configName string) error {
 	}
 
 	destinationImageDir := filepath.Join(isolated.originalWorkDir, providerID, "imagebuild", configName)
+	if !isSubPath(isolated.originalWorkDir, destinationImageDir) {
+		return fmt.Errorf("image output destination path %q escapes configured workspace %q", destinationImageDir, isolated.originalWorkDir)
+	}
 	// Pre-create the destination with 0700 to match the image build directory
 	// permissions; CopyDir's mkdir -p would otherwise use more permissive defaults.
 	if err := os.MkdirAll(destinationImageDir, 0700); err != nil {
@@ -100,4 +118,13 @@ func (isolated *Isolated) PreserveOutput(providerID, configName string) error {
 
 	logger.Logger().Infof("--nocache: build output copied to %s", destinationImageDir)
 	return nil
+}
+
+// isSubPath reports whether child is strictly under parent (both must be cleaned
+// absolute paths). It guards against path-traversal via ".." components in the
+// providerID or configName values supplied to PreserveOutput.
+func isSubPath(parent, child string) bool {
+	parent = filepath.Clean(parent) + string(os.PathSeparator)
+	child = filepath.Clean(child) + string(os.PathSeparator)
+	return strings.HasPrefix(child, parent)
 }

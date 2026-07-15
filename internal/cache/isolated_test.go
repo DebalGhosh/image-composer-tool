@@ -3,7 +3,6 @@ package cache
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -77,36 +76,46 @@ func TestSetupIsolated_CleanupKeepsWorkspaceOnFlag(t *testing.T) {
 	}
 }
 
-// TestSetupIsolated_ErrorWhenCacheParentMissing verifies SetupIsolated surfaces an
-// error when the unique cache directory cannot be created.
-func TestSetupIsolated_ErrorWhenCacheParentMissing(t *testing.T) {
+// TestSetupIsolated_CreatesCacheParentIfMissing verifies that SetupIsolated creates
+// missing parent directories for the cache directory before calling MkdirTemp.
+func TestSetupIsolated_CreatesCacheParentIfMissing(t *testing.T) {
 	originalCacheDir := filepath.Join(t.TempDir(), "does-not-exist", "cache")
 	originalWorkDir := filepath.Join(t.TempDir(), "workspace")
-	if _, _, err := SetupIsolated(originalCacheDir, originalWorkDir); err == nil {
-		t.Fatal("expected SetupIsolated to fail when the cache parent directory is missing")
+
+	isolated, cleanup, err := SetupIsolated(originalCacheDir, originalWorkDir)
+	if err != nil {
+		t.Fatalf("SetupIsolated should succeed when parent is missing (it creates it): %v", err)
+	}
+	defer cleanup()
+
+	// The unique cache directory should have been created under the (now-existing) parent.
+	if _, statErr := os.Stat(isolated.CacheDir); statErr != nil {
+		t.Errorf("unique cache directory should exist: %v", statErr)
+	}
+	if got, want := filepath.Dir(isolated.CacheDir), filepath.Dir(originalCacheDir); got != want {
+		t.Errorf("unique cache directory parent = %q, want %q", got, want)
 	}
 }
 
-// TestSetupIsolated_ErrorWhenWorkParentMissing verifies that when creating the unique
-// workspace fails, the already-created unique cache directory is cleaned up.
-func TestSetupIsolated_ErrorWhenWorkParentMissing(t *testing.T) {
+// TestSetupIsolated_CreatesWorkParentIfMissing verifies that SetupIsolated creates
+// missing parent directories for the workspace directory before calling MkdirTemp.
+func TestSetupIsolated_CreatesWorkParentIfMissing(t *testing.T) {
 	tempDir := t.TempDir()
-	originalCacheDir := filepath.Join(tempDir, "cache")                      // parent (tempDir) exists
-	originalWorkDir := filepath.Join(tempDir, "missing-parent", "workspace") // parent missing
+	originalCacheDir := filepath.Join(tempDir, "cache")
+	originalWorkDir := filepath.Join(tempDir, "missing-parent", "workspace")
 
-	if _, _, err := SetupIsolated(originalCacheDir, originalWorkDir); err == nil {
-		t.Fatal("expected SetupIsolated to fail when the workspace parent directory is missing")
-	}
-
-	// The unique cache directory created before the failure must have been removed.
-	entries, err := os.ReadDir(tempDir)
+	isolated, cleanup, err := SetupIsolated(originalCacheDir, originalWorkDir)
 	if err != nil {
-		t.Fatalf("failed to read temp directory: %v", err)
+		t.Fatalf("SetupIsolated should succeed when workspace parent is missing (it creates it): %v", err)
 	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "ict-nocache-cache-") {
-			t.Errorf("leftover unique cache directory was not cleaned up: %s", entry.Name())
-		}
+	defer cleanup()
+
+	// The unique workspace directory should have been created under the (now-existing) parent.
+	if _, statErr := os.Stat(isolated.WorkDir); statErr != nil {
+		t.Errorf("unique workspace directory should exist: %v", statErr)
+	}
+	if got, want := filepath.Dir(isolated.WorkDir), filepath.Dir(originalWorkDir); got != want {
+		t.Errorf("unique workspace directory parent = %q, want %q", got, want)
 	}
 }
 
@@ -169,6 +178,30 @@ func TestIsolated_PreserveOutput(t *testing.T) {
 		destinationPath := filepath.Join(isolated.originalWorkDir, providerID, "imagebuild", configName)
 		if _, err := os.Stat(destinationPath); !os.IsNotExist(err) {
 			t.Errorf("destination should not exist when there is no output, stat err: %v", err)
+		}
+	})
+
+	t.Run("RejectsTraversalInProviderID", func(t *testing.T) {
+		tempDir := t.TempDir()
+		isolated := &Isolated{
+			WorkDir:         filepath.Join(tempDir, "unique-workspace"),
+			originalWorkDir: filepath.Join(tempDir, "orig-workspace"),
+		}
+		// A traversal in providerID must return an error without touching the filesystem.
+		if err := isolated.PreserveOutput("../../etc", configName); err == nil {
+			t.Error("expected error when providerID contains path traversal")
+		}
+	})
+
+	t.Run("RejectsTraversalInConfigName", func(t *testing.T) {
+		tempDir := t.TempDir()
+		isolated := &Isolated{
+			WorkDir:         filepath.Join(tempDir, "unique-workspace"),
+			originalWorkDir: filepath.Join(tempDir, "orig-workspace"),
+		}
+		// A traversal in configName must return an error without touching the filesystem.
+		if err := isolated.PreserveOutput(providerID, "../../../etc/passwd"); err == nil {
+			t.Error("expected error when configName contains path traversal")
 		}
 	})
 }

@@ -206,7 +206,7 @@ post:
 			if isolated != nil {
 				isolated.KeepWorkspace()
 			}
-			return fmt.Errorf("post-processing failed: %v", err)
+			return fmt.Errorf("post-processing failed: %w", err)
 		}
 	}
 
