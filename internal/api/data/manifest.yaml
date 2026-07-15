@@ -32,6 +32,14 @@ combinations:
     imageType: raw
     template: generic-handheld-os-template.yml
 
+  # BKC (Best Known Configuration) — generic platform image built via overlay.
+  - vertical: bkc
+    sku: non-realtime
+    platform: generic
+    os: ubuntu24
+    imageType: raw
+    template: ubuntu24-x86_64-overlay-ubuntu-raw_ww28.1.yml
+
 verticals:
   - id: retail
     displayName: Retail Edge
@@ -39,6 +47,8 @@ verticals:
     displayName: Robotics
   - id: fed-aero
     displayName: Fed Aero
+  - id: bkc
+    displayName: BKC
 
 skus:
   - id: desktop-virtualization
@@ -47,6 +57,8 @@ skus:
     displayName: Autonomous Mobile Robots (AMR)
   - id: generic-handheld-blueprint
     displayName: Generic Handheld Blueprint
+  - id: non-realtime
+    displayName: Non-Realtime
 
 platforms:
   - id: arl
@@ -55,6 +67,8 @@ platforms:
     displayName: WCL (Wildcat Lake)
   - id: ptl
     displayName: PTL (Panther Lake)
+  - id: generic
+    displayName: Generic
 
 targets:
   - id: debian13

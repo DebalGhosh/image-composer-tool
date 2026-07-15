@@ -75,72 +75,69 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
         based on your selection.
       </p>
 
-      <div className="max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <Select
-          label="Targeted Vertical"
-          placeholder="-- Select Vertical --"
-          value={selection.vertical}
-          options={opts.verticals}
-          onChange={(v) => setSel('vertical', v)}
-        />
-        <Select
-          label="SKU"
-          placeholder="-- Select SKU --"
-          value={selection.sku}
-          options={opts.skus}
-          disabled={!selection.vertical}
-          onChange={(v) => setSel('sku', v)}
-        />
-        <Select
-          label="Platform"
-          placeholder="-- Select Platform --"
-          value={selection.platform}
-          options={opts.platforms}
-          disabled={!selection.sku && opts.skus.length > 0}
-          onChange={(v) => setSel('platform', v)}
-        />
-        <Select
-          label="Operating System"
-          placeholder="-- Select Operating System --"
-          value={selection.os}
-          options={opts.oses}
-          disabled={!selection.platform}
-          onChange={(v) => setSel('os', v)}
-        />
-        {/* Kernel selector appears only when the manifest offers kernel variants
-            (e.g. standard vs real-time) for the current selection. */}
-        {opts.kernels.length > 0 && (
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <Select
-            label="Kernel"
-            placeholder="-- Select Kernel --"
-            value={selection.kernel}
-            options={opts.kernels}
-            disabled={!selection.os}
-            onChange={(v) => setSel('kernel', v)}
+            label="Targeted Vertical"
+            placeholder="-- Select Vertical --"
+            value={selection.vertical}
+            options={opts.verticals}
+            onChange={(v) => setSel('vertical', v)}
           />
-        )}
-        <Select
-          label="Image Type"
-          placeholder="-- Select Image Type --"
-          value={selection.imageType}
-          options={opts.imageTypes}
-          disabled={!selection.os || (opts.kernels.length > 0 && !selection.kernel)}
-          onChange={(v) => setSel('imageType', v)}
-        />
-
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={reviewOpen}
-            disabled={!complete}
-            onChange={onToggleReview}
+          <Select
+            label="SKU"
+            placeholder="-- Select SKU --"
+            value={selection.sku}
+            options={opts.skus}
+            disabled={!selection.vertical}
+            onChange={(v) => setSel('sku', v)}
           />
-          Review Image Configuration
-        </label>
+          <Select
+            label="Platform"
+            placeholder="-- Select Platform --"
+            value={selection.platform}
+            options={opts.platforms}
+            disabled={!selection.sku && opts.skus.length > 0}
+            onChange={(v) => setSel('platform', v)}
+          />
+          <Select
+            label="Operating System"
+            placeholder="-- Select Operating System --"
+            value={selection.os}
+            options={opts.oses}
+            disabled={!selection.platform}
+            onChange={(v) => setSel('os', v)}
+          />
+          {/* Kernel selector appears only when the manifest offers kernel variants
+              (e.g. standard vs real-time) for the current selection. */}
+          {opts.kernels.length > 0 && (
+            <Select
+              label="Kernel"
+              placeholder="-- Select Kernel --"
+              value={selection.kernel}
+              options={opts.kernels}
+              disabled={!selection.os}
+              onChange={(v) => setSel('kernel', v)}
+            />
+          )}
+          {/* Image Type (raw/iso) is auto-selected from the manifest for the
+              chosen combination and not shown in Basic mode. */}
 
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={reviewOpen}
+              disabled={!complete}
+              onChange={onToggleReview}
+            />
+            Review Image Configuration
+          </label>
+        </div>
+
+        {/* Review panel — sits beside the dropdowns to use the free space. */}
         {reviewOpen && review && (
-          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded bg-slate-100 p-3">
+          <div className="grid flex-1 grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
               <table className="w-full">
                 <tbody>
@@ -159,7 +156,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                 </tbody>
               </table>
             </div>
-            <div className="rounded bg-slate-100 p-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
               <table className="w-full">
                 <tbody>

@@ -22,13 +22,26 @@ export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: B
   const [selectedId, setSelectedId] = useState<string | null>(buildId)
 
   const refresh = useCallback(() => {
-    api.listBuilds().then(setHistory).catch(() => {})
+    return api.listBuilds().then((builds) => {
+      setHistory(builds)
+      return builds
+    }).catch(() => [] as HistoryItem[])
   }, [])
+
+  // Load history on mount, and auto-select the newest build so the panel isn't
+  // empty on first visit / after a refresh (history persists on the server).
+  useEffect(() => {
+    refresh().then((builds) => {
+      setSelectedId((cur) => cur ?? (builds.length > 0 ? builds[0].id : null))
+    })
+  }, [refresh])
 
   // When a new compose starts (active buildId changes), select it and refresh.
   useEffect(() => {
-    if (buildId) setSelectedId(buildId)
-    refresh()
+    if (buildId) {
+      setSelectedId(buildId)
+      refresh()
+    }
   }, [buildId, refresh])
 
   // Poll while any build is still running so the sidebar reflects live status.

@@ -39,6 +39,23 @@ export default function App() {
 
   useEffect(load, [load])
 
+  // On load, adopt any already-running build from the server so the UI reflects
+  // it after a refresh: disables the Compose button and shows the nav indicator
+  // (otherwise buildStatus resets to 'idle' and a duplicate build could start).
+  useEffect(() => {
+    if (state !== 'ready') return
+    api
+      .listBuilds()
+      .then((builds) => {
+        const running = builds.find((b) => b.status === 'running')
+        if (running) {
+          setBuildId(running.id)
+          setBuildStatus('running')
+        }
+      })
+      .catch(() => {})
+  }, [state])
+
   const onBuildStarted = (id: string) => {
     setBuildId(id)
     setBuildStatus('running')
