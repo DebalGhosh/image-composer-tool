@@ -172,7 +172,7 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 
 	// Debug mode: Pretty print the merged template with sensitive data redacted
 	if IsDebugMode() {
-		redactedTemplate := redactSensitiveData(&mergedTemplate)
+		redactedTemplate := RedactSensitiveData(&mergedTemplate)
 		pretty, err := json.MarshalIndent(redactedTemplate, "", "  ")
 		if err != nil {
 			log.Warnf("Failed to pretty print merged template: %v", err)
@@ -187,9 +187,9 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 	return &mergedTemplate, nil
 }
 
-// redactSensitiveData creates a copy of the template with sensitive data redacted for safe logging.
-// This prevents passwords, keys, and other sensitive information from appearing in logs.
-func redactSensitiveData(template *ImageTemplate) *ImageTemplate {
+// RedactSensitiveData creates a copy of the template with sensitive data redacted for safe display or logging.
+// This prevents passwords, keys, and other sensitive information from appearing in logs or user-facing output.
+func RedactSensitiveData(template *ImageTemplate) *ImageTemplate {
 	// Create a deep copy
 	redacted := *template
 	redacted.SystemConfig = redactSensitiveSystemConfig(template.SystemConfig)
