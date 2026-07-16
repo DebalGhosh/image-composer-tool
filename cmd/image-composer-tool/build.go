@@ -32,7 +32,7 @@ var (
 	workDir            string = "" // Empty means use config file value
 	dotFile            string = "" // Generate a dot file for the dependency graph
 	systemPackagesOnly bool   = false
-	noCache            bool   = false // Build from scratch in fresh, unique cache/workspace dirs
+	noCache            bool   = false // --no-cache: build from scratch in fresh, unique cache/workspace dirs
 
 	// Overlay-mode flags.
 	inspectImage  bool   = true  // --inspect/--no-inspect: toggle image inspection (default on)
@@ -62,7 +62,7 @@ The template file must be in YAML format following the image template schema.`,
 	buildCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	buildCmd.Flags().StringVarP(&dotFile, "dotfile", "f", "", "Generate a dot file for the dependency graph")
 	buildCmd.Flags().BoolVar(&systemPackagesOnly, "system-packages-only", false, "When generating a dot graph, only include roots from SystemConfig.Packages")
-	buildCmd.Flags().BoolVar(&noCache, "nocache", false,
+	buildCmd.Flags().BoolVar(&noCache, "no-cache", false,
 		"Build from scratch using fresh, unique cache and workspace directories that are removed after the build (the final image is copied to the configured workspace)")
 
 	// Overlay-mode flags. --inspect defaults on; --no-inspect is its negation.
@@ -94,13 +94,13 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		config.SetGlobal(currentConfig)
 	}
 
-	// When --nocache is set, run the build in fresh, unique cache and workspace
+	// When --no-cache is set, run the build in fresh, unique cache and workspace
 	// directories so nothing is reused from previous builds, then remove them once the
 	// build finishes. The final image is copied back to the configured workspace.
 	var isolated *cache.Isolated
 	if noCache {
 		if cmd.Flags().Changed("cache-dir") || cmd.Flags().Changed("work-dir") {
-			return fmt.Errorf("--nocache cannot be combined with --cache-dir or --work-dir")
+			return fmt.Errorf("--no-cache cannot be combined with --cache-dir or --work-dir")
 		}
 		// Resolve absolute cache/work paths for the isolated setup — SetupIsolated
 		// needs absolute paths to place the unique dirs adjacent to them. Keep the
@@ -116,7 +116,7 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		}
 		createdIsolated, cleanup, setupErr := cache.SetupIsolated(resolvedCacheDir, resolvedWorkDir)
 		if setupErr != nil {
-			return fmt.Errorf("setting up --nocache directories: %w", setupErr)
+			return fmt.Errorf("setting up --no-cache directories: %w", setupErr)
 		}
 		// Point the build at the isolated directories via the config singleton (the same
 		// mechanism --cache-dir/--work-dir use); restore the raw configured strings during
@@ -206,7 +206,7 @@ post:
 
 	if p != nil {
 		if err := p.PostProcess(template, buildErr); err != nil {
-			// In --nocache mode the deferred cleanup would otherwise remove the unique
+			// In --no-cache mode the deferred cleanup would otherwise remove the unique
 			// workspace on return, discarding a successfully built image. Preserve it so
 			// the image (and any state needed for recovery) survives a PostProcess failure.
 			if isolated != nil {
@@ -217,14 +217,14 @@ post:
 	}
 
 	if buildErr == nil {
-		// For --nocache, copy the freshly built image out of the temporary workspace before
+		// For --no-cache, copy the freshly built image out of the temporary workspace before
 		// reporting success: a copy-out failure is a build failure and must not be logged as a
 		// completed build. The deferred cleanup removes the temporary workspace on return.
 		if isolated != nil {
 			providerId := system.GetProviderId(template.Target.OS, template.Target.Dist, template.Target.Arch)
 			if err := isolated.PreserveOutput(providerId, template.GetSystemConfigName()); err != nil {
 				isolated.KeepWorkspace()
-				return fmt.Errorf("preserving --nocache build output: %w", err)
+				return fmt.Errorf("preserving --no-cache build output: %w", err)
 			}
 		}
 

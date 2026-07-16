@@ -11,7 +11,7 @@ import (
 )
 
 // Isolated holds the fresh, unique cache and workspace directories created for a
-// from-scratch (--nocache) build, so the final image can be copied out and the
+// from-scratch (--no-cache) build, so the final image can be copied out and the
 // directories removed once the build finishes.
 type Isolated struct {
 	// CacheDir and WorkDir are the freshly created unique directories the caller
@@ -32,7 +32,7 @@ type Isolated struct {
 // directories, and restoring afterwards, is the caller's responsibility.
 func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(), error) {
 	// Match internal/config/global.go's cache/work MkdirAll perms (0o700). The
-	// wider 0o755 default would leave a world-readable parent when --nocache is
+	// wider 0o755 default would leave a world-readable parent when --no-cache is
 	// the first thing to create the configured cache_dir/work_dir tree.
 	cacheDirParent := filepath.Dir(originalCacheDir)
 	if err := os.MkdirAll(cacheDirParent, 0o700); err != nil {
@@ -64,18 +64,18 @@ func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(),
 	}
 
 	log := logger.Logger()
-	log.Infof("--nocache: building in fresh cache %s and workspace %s", uniqueCacheDir, uniqueWorkDir)
+	log.Infof("--no-cache: building in fresh cache %s and workspace %s", uniqueCacheDir, uniqueWorkDir)
 
 	cleanup := func() {
 		if err := os.RemoveAll(uniqueCacheDir); err != nil {
-			log.Warnf("failed to remove --nocache cache directory %s: %v", uniqueCacheDir, err)
+			log.Warnf("failed to remove --no-cache cache directory %s: %v", uniqueCacheDir, err)
 		}
 		if isolated.keepWorkDir {
-			log.Infof("--nocache: preserving workspace %s for recovery", uniqueWorkDir)
+			log.Infof("--no-cache: preserving workspace %s for recovery", uniqueWorkDir)
 			return
 		}
 		if err := os.RemoveAll(uniqueWorkDir); err != nil {
-			log.Warnf("failed to remove --nocache workspace directory %s: %v", uniqueWorkDir, err)
+			log.Warnf("failed to remove --no-cache workspace directory %s: %v", uniqueWorkDir, err)
 		}
 	}
 
@@ -119,7 +119,7 @@ func (isolated *Isolated) PreserveOutput(providerID, configName string) error {
 		return fmt.Errorf("copying image output to %s: %w", destinationImageDir, err)
 	}
 
-	logger.Logger().Infof("--nocache: build output copied to %s", destinationImageDir)
+	logger.Logger().Infof("--no-cache: build output copied to %s", destinationImageDir)
 	return nil
 }
 

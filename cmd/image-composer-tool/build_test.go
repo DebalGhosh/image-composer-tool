@@ -108,7 +108,7 @@ func TestCreateBuildCommand(t *testing.T) {
 			{name: "workers", shorthand: "w", shouldExist: true},
 			{name: "cache-dir", shorthand: "d", shouldExist: true},
 			{name: "work-dir", shorthand: "", shouldExist: true},
-			{name: "nocache", shorthand: "", shouldExist: true},
+			{name: "no-cache", shorthand: "", shouldExist: true},
 			{name: "inspect", shorthand: "", shouldExist: true},
 			{name: "no-inspect", shorthand: "", shouldExist: true},
 			{name: "cve-check", shorthand: "", shouldExist: true},
@@ -593,7 +593,7 @@ func TestBuildCommand_HelpText(t *testing.T) {
 		"--workers",
 		"--cache-dir",
 		"--work-dir",
-		"--nocache",
+		"--no-cache",
 		"--inspect",
 		"--no-inspect",
 		"--cve-check",
@@ -1003,7 +1003,7 @@ func TestBuildCommand_ArgumentValidation(t *testing.T) {
 	}
 }
 
-// TestExecuteBuild_NoCacheMutualExclusion verifies that --nocache cannot be combined
+// TestExecuteBuild_NoCacheMutualExclusion verifies that --no-cache cannot be combined
 // with --cache-dir or --work-dir.
 func TestExecuteBuild_NoCacheMutualExclusion(t *testing.T) {
 	prev := *config.Global()
@@ -1023,8 +1023,8 @@ func TestExecuteBuild_NoCacheMutualExclusion(t *testing.T) {
 			defer resetBuildFlags()
 
 			cmd := createBuildCommand()
-			if err := cmd.Flags().Set("nocache", "true"); err != nil {
-				t.Fatalf("failed to set nocache flag: %v", err)
+			if err := cmd.Flags().Set("no-cache", "true"); err != nil {
+				t.Fatalf("failed to set no-cache flag: %v", err)
 			}
 			if err := cmd.Flags().Set(tt.flag, tt.val); err != nil {
 				t.Fatalf("failed to set %s flag: %v", tt.flag, err)
@@ -1032,7 +1032,7 @@ func TestExecuteBuild_NoCacheMutualExclusion(t *testing.T) {
 
 			err := executeBuild(cmd, []string{"template.yml"})
 			if err == nil {
-				t.Fatalf("expected error when combining --nocache with --%s", tt.flag)
+				t.Fatalf("expected error when combining --no-cache with --%s", tt.flag)
 			}
 			if !strings.Contains(err.Error(), "cannot be combined") {
 				t.Errorf("expected mutual-exclusion error, got: %v", err)
