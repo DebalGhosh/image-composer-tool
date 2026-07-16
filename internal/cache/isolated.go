@@ -31,8 +31,11 @@ type Isolated struct {
 // It deliberately does not touch global state: pointing the build at the returned
 // directories, and restoring afterwards, is the caller's responsibility.
 func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(), error) {
+	// Match internal/config/global.go's cache/work MkdirAll perms (0o700). The
+	// wider 0o755 default would leave a world-readable parent when --nocache is
+	// the first thing to create the configured cache_dir/work_dir tree.
 	cacheDirParent := filepath.Dir(originalCacheDir)
-	if err := os.MkdirAll(cacheDirParent, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDirParent, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("creating cache parent directory %s: %w", cacheDirParent, err)
 	}
 	uniqueCacheDir, err := os.MkdirTemp(cacheDirParent, "ict-nocache-cache-*")
@@ -40,7 +43,7 @@ func SetupIsolated(originalCacheDir, originalWorkDir string) (*Isolated, func(),
 		return nil, nil, fmt.Errorf("creating unique cache directory: %w", err)
 	}
 	workDirParent := filepath.Dir(originalWorkDir)
-	if err := os.MkdirAll(workDirParent, 0o755); err != nil {
+	if err := os.MkdirAll(workDirParent, 0o700); err != nil {
 		if removeErr := os.RemoveAll(uniqueCacheDir); removeErr != nil {
 			logger.Logger().Warnf("failed to remove unique cache directory %s: %v", uniqueCacheDir, removeErr)
 		}
