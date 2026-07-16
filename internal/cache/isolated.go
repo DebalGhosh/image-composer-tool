@@ -123,11 +123,14 @@ func (isolated *Isolated) PreserveOutput(providerID, configName string) error {
 	return nil
 }
 
-// isSubPath reports whether child is strictly under parent. Both paths must be
-// absolute (the function returns false when either is relative). It guards against
-// path-traversal via ".." components in the providerID or configName values supplied
-// to PreserveOutput. This comparison uses string matching on the cleaned paths, which
-// is correct for the case-sensitive Linux filesystems this tool targets.
+// isSubPath reports whether child equals or is nested under parent. Both paths
+// must be absolute (the function returns false when either is relative). It
+// guards against path-traversal via ".." components in the providerID or
+// configName values supplied to PreserveOutput: cleaning strips a "../.." that
+// would otherwise escape the parent, so a cleaned child that no longer has the
+// parent as a prefix is rejected. This comparison uses string matching on the
+// cleaned paths, which is correct for the case-sensitive Linux filesystems
+// this tool targets.
 func isSubPath(parent, child string) bool {
 	if !filepath.IsAbs(parent) || !filepath.IsAbs(child) {
 		return false
