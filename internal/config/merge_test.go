@@ -1612,7 +1612,8 @@ func TestRedactSensitiveData_RedactsUserAndSecureBootFields(t *testing.T) {
 	if redacted.Image.Name != "img" {
 		t.Errorf("expected image name preserved, got %q", redacted.Image.Name)
 	}
-	// The original template must not be mutated (deep copy semantics).
+	// The original template's SystemConfig must not be mutated — the redactor
+	// deep-copies SystemConfig before rewriting sensitive fields.
 	if tmpl.SystemConfig.Users[0].Password != "hunter2" {
 		t.Errorf("original password mutated: %q", tmpl.SystemConfig.Users[0].Password)
 	}
