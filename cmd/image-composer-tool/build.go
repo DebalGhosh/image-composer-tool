@@ -102,29 +102,35 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("cache-dir") || cmd.Flags().Changed("work-dir") {
 			return fmt.Errorf("--nocache cannot be combined with --cache-dir or --work-dir")
 		}
-		originalCacheDir, err := config.CacheDir()
+		// Resolve absolute cache/work paths for the isolated setup — SetupIsolated
+		// needs absolute paths to place the unique dirs adjacent to them. Keep the
+		// raw (possibly relative) singleton values separately so the restore below
+		// puts the singleton back exactly as the user configured it.
+		resolvedCacheDir, err := config.CacheDir()
 		if err != nil {
 			return fmt.Errorf("resolving cache directory: %w", err)
 		}
-		originalWorkDir, err := config.WorkDir()
+		resolvedWorkDir, err := config.WorkDir()
 		if err != nil {
 			return fmt.Errorf("resolving work directory: %w", err)
 		}
-		createdIsolated, cleanup, setupErr := cache.SetupIsolated(originalCacheDir, originalWorkDir)
+		createdIsolated, cleanup, setupErr := cache.SetupIsolated(resolvedCacheDir, resolvedWorkDir)
 		if setupErr != nil {
 			return fmt.Errorf("setting up --nocache directories: %w", setupErr)
 		}
 		// Point the build at the isolated directories via the config singleton (the same
-		// mechanism --cache-dir/--work-dir use); restore it during cleanup so later
-		// code in this process never consults the removed directories.
+		// mechanism --cache-dir/--work-dir use); restore the raw configured strings during
+		// cleanup so a config file using relative paths is not silently converted to
+		// absolute paths, and later code in this process never consults the removed dirs.
 		currentConfig := config.Global()
+		rawCacheDir, rawWorkDir := currentConfig.CacheDir, currentConfig.WorkDir
 		currentConfig.CacheDir = createdIsolated.CacheDir
 		currentConfig.WorkDir = createdIsolated.WorkDir
 		config.SetGlobal(currentConfig)
 		defer func() {
 			restoredConfig := config.Global()
-			restoredConfig.CacheDir = originalCacheDir
-			restoredConfig.WorkDir = originalWorkDir
+			restoredConfig.CacheDir = rawCacheDir
+			restoredConfig.WorkDir = rawWorkDir
 			config.SetGlobal(restoredConfig)
 			cleanup()
 		}()
