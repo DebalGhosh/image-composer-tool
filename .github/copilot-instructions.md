@@ -214,7 +214,7 @@ All PRs must pass before merge:
 
 ## Image Template Conventions
 
-Name `<dist>-<arch>-<purpose>-<imageType>.yml`. Minimal user templates need only `image` + `target`; always include a `metadata` block. Packages merge _additively_; `disk` _replaces_ entirely. Templates can inherit from a single parent via `extends: "sibling.yml"` — chains fold root-to-leaf using the same per-section rules as the user↔default merge, `target` must match across the chain, symlink parents are rejected, and the `extends:` field is stripped from the final merged output. Use `image-composer-tool resolve TEMPLATE.yml` to inspect the chain-merged view (redacts sensitive fields) or `resolve TEMPLATE.yml --full` to also fold in OS defaults. Validate with `image-composer-tool validate -t <template.yml>` before committing.
+Name `<dist>-<arch>-<purpose>-<imageType>.yml`. Minimal user templates need only `image` + `target`; always include a `metadata` block. Packages merge _additively_; `disk` _replaces_ entirely. Templates can inherit from a single parent via `extends: "sibling.yml"` — chains fold root-to-leaf using the same per-section rules as the user↔default merge, `target` must match across the chain, symlink parents are rejected, and the `extends:` field is stripped from the final merged output. Use `image-composer-tool resolve TEMPLATE.yml` to inspect the chain-merged view (redacts sensitive fields) or `resolve TEMPLATE.yml --full` to also fold in OS defaults. Validate with `image-composer-tool validate <template.yml>` before committing.
 
 > Full conventions: [.github/instructions/image-templates.instructions.md](instructions/image-templates.instructions.md) (auto-applies to `image-templates/**/*.yml`).
 

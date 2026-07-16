@@ -46,7 +46,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [Chain Resolution](#chain-resolution)
     - [Limitations and Validation Rules](#limitations-and-validation-rules)
     - [Debugging an Extends Chain](#debugging-an-extends-chain)
-    - [Related Documentation](#related-documentation-1)
+    - [Related Documentation](#related-documentation)
   - [Variable Substitution](#variable-substitution)
 - [WSL Required Fields](#wsl-required-fields)
 - [Package Repositories](#package-repositories)
@@ -54,7 +54,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
   - [Priority Behavior](#priority-behavior)
   - [AllowPackages White List](#allowpackages-white-list)
 - [Best Practices](#best-practices)
-- [Related Documentation](#related-documentation)
+- [Related Documentation](#related-documentation-1)
 
 ## What Are Templates and How Do They Work?
 
@@ -810,10 +810,15 @@ systemConfig:
 The same per-section rules that govern the [user↔default merge
 above](#template-merge-behavior) apply at every level of an `extends`
 chain. Because `MergeConfigurations(child, parent)` is a pure function of
-two inputs, applying it iteratively as a fold produces a deterministic
-result at any depth: if the merge is deterministic for two layers, it is
-deterministic for N. The table below lists the full behavior across a
-chain:
+two inputs, applying it iteratively as a fold produces the same set of
+merged fields at any depth: if the merge is deterministic for two
+layers, it is deterministic for N. Note that the ordering of slice
+entries merged by key (`systemConfig.users` by name, and
+`systemConfig.additionalFiles` by destination path) is not guaranteed to
+be stable across runs — the merge implementation uses a map to
+deduplicate keys, so the emitted slice order for those two fields may
+vary. Every other field's ordering is stable. The table below lists the
+full behavior across a chain:
 
 | Section | Rule (chain semantics) |
 |---------|------------------------|
@@ -823,8 +828,8 @@ chain:
 | `disk` | Wholesale replacement when the child provides a non-empty disk config |
 | `systemConfig.name` / `.description` / `.hostname` / `.initramfs.template` | Non-empty child overrides |
 | `systemConfig.packages` | **Additive union, deduplicated**; each level's packages are appended in chain order and de-duplicated |
-| `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users appended |
-| `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files appended |
+| `systemConfig.users` | Merged by `name`: same-name entries are field-level merged; new users included (slice order not guaranteed to be stable across runs) |
+| `systemConfig.additionalFiles` | Merged by `final` destination path: same target overrides; new files included (slice order not guaranteed to be stable across runs) |
 | `systemConfig.configurations` | **Additive concat**: appended in chain order (root first, leaf last), no deduplication |
 | `systemConfig.kernel` | Per-field override: `version`, `cmdline`, `packages`, `enableExtraModules` |
 | `systemConfig.bootloader` | Per-field override: `bootType`, `provider` |
@@ -921,7 +926,7 @@ sees it after the chain is folded:
 # Chain-only merge, without OS defaults (useful for verifying inheritance)
 image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml
 
-# Full build-time view: extends chain + OS defaults on top
+# Full build-time view: OS defaults as base, extends chain folded on top (leaf wins)
 image-composer-tool resolve image-templates/ubuntu24-x86_64-extends-example-raw.yml --full
 ```
 
