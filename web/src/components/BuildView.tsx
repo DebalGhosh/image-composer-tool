@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { Artifact, BuildDetails } from '../api/types'
+import { BuildProgress } from './BuildProgress'
 
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
@@ -25,6 +26,8 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [phase, setPhase] = useState<string>('preparing')
+  const [install, setInstall] = useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const logRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,6 +37,8 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
     setErrorMsg('')
     setDetails(null)
     setDetailsOpen(false)
+    setPhase(isActive ? 'preparing' : 'done')
+    setInstall({ done: 0, total: 0 })
 
     // Fetch the command + resolved template paths for the troubleshoot panel.
     // Best-effort: a failure here shouldn't disrupt the log stream.
@@ -62,6 +67,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
 
     const finishSuccess = () => {
       setStatus('success')
+      setPhase('done')
       onStatusChange('success')
       // Refresh details/artifacts so the log-file link + artifact list appear.
       api.buildDetails(buildId).then(setDetails).catch(() => {})
@@ -83,6 +89,11 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
       es.addEventListener('log', (e) => {
         const { message } = JSON.parse((e as MessageEvent).data)
         setLogs((prev) => [...prev, message])
+      })
+      es.addEventListener('phase', (e) => {
+        const data = JSON.parse((e as MessageEvent).data)
+        if (data.phase) setPhase(data.phase)
+        setInstall({ done: data.installDone ?? 0, total: data.installTotal ?? 0 })
       })
       es.addEventListener('complete', (e) => {
         const data = JSON.parse((e as MessageEvent).data)
@@ -160,6 +171,12 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange, isActive
           </button>
         )}
       </div>
+
+      {/* Phase stepper — shown for the active (streaming) build. History builds
+          have no live phase data, so it's omitted there. */}
+      {isActive && (
+        <BuildProgress phase={phase} install={install} failed={status === 'failed'} />
+      )}
 
       {status === 'failed' && errorMsg && (
         <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">Compose failed: {errorMsg}</div>

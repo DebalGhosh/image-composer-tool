@@ -866,3 +866,59 @@ func TestNormalizeSize(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectPhase(t *testing.T) {
+	// Empty logs → preparing.
+	if got := detectPhase(nil); got != "preparing" {
+		t.Errorf("empty logs phase = %q, want preparing", got)
+	}
+	// Furthest marker wins regardless of order of earlier lines. Resolve and
+	// download collapse into the single "packages" phase.
+	logs := []string{
+		"2026 INFO Loaded image template from x.yml",
+		"2026 INFO downloading 239 packages to /cache using 8 workers",
+		"2026 INFO resolving dependencies for 239 DEBIANs",
+		"2026 INFO Chroot environment build completed successfully",
+		"2026 INFO Image package installation...",
+	}
+	if got := detectPhase(logs); got != "installing" {
+		t.Errorf("phase = %q, want installing", got)
+	}
+	// Terminal marker.
+	if got := detectPhase([]string{"2026 INFO image build completed successfully"}); got != "done" {
+		t.Errorf("done phase = %q, want done", got)
+	}
+	// Resolve/download → the merged "packages" phase (RPM wording too).
+	if got := detectPhase([]string{"2026 INFO resolving dependencies for 100 RPMs"}); got != "packages" {
+		t.Errorf("rpm resolve phase = %q, want packages", got)
+	}
+	// Regression: chroot build and the initrd download round that FOLLOWS it are
+	// all still the "packages" phase — nothing goes green until install starts.
+	seq := []string{
+		"2026 INFO Chroot environment build completed successfully",
+		"2026 INFO Building image: debian13-x86_64-desktop-virtualization",
+		"2026 INFO downloading 239 packages to /cache using 8 workers",
+		"2026 INFO resolving dependencies for 54 DEBIANs",
+		"2026 INFO all downloads complete",
+	}
+	if got := detectPhase(seq); got != "packages" {
+		t.Errorf("chroot + post-chroot download phase = %q, want packages (not installing)", got)
+	}
+	// Install marker advances the stepper; ISO assembly marks generating.
+	if got := detectPhase(append(seq, "2026 INFO Image package installation...", "2026 INFO Creating ISO image...")); got != "generating" {
+		t.Errorf("iso-assembly phase = %q, want generating", got)
+	}
+}
+
+func TestInstallProgress(t *testing.T) {
+	logs := []string{
+		"2026 INFO Installing package 1/128: curl",
+		"2026 INFO Installing package 42/128: vim",
+	}
+	if d, tot := installProgress(logs); d != 42 || tot != 128 {
+		t.Errorf("installProgress = %d/%d, want 42/128", d, tot)
+	}
+	if d, tot := installProgress([]string{"no counter here"}); d != 0 || tot != 0 {
+		t.Errorf("installProgress(none) = %d/%d, want 0/0", d, tot)
+	}
+}

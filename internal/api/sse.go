@@ -32,10 +32,25 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	sent := 0
+	lastPhase := ""
+	lastInstall := ""
 	emit := func() {
 		lines := b.snapshotLogs()
 		for ; sent < len(lines); sent++ {
 			sendEvent(w, "log", map[string]string{"message": lines[sent]})
+		}
+		// Derive and emit the current build phase (+ install progress) when it
+		// changes, so the UI stepper can advance. Best-effort, log-derived.
+		phase := detectPhase(lines)
+		done, total := installProgress(lines)
+		install := fmt.Sprintf("%d/%d", done, total)
+		if phase != lastPhase || install != lastInstall {
+			lastPhase, lastInstall = phase, install
+			sendEvent(w, "phase", map[string]any{
+				"phase":        phase,
+				"installDone":  done,
+				"installTotal": total,
+			})
 		}
 		flusher.Flush()
 	}
@@ -58,6 +73,8 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 				if arts == nil {
 					arts = []artifact{}
 				}
+				// Ensure the stepper shows completion.
+				sendEvent(w, "phase", map[string]any{"phase": "done"})
 				sendEvent(w, "complete", map[string]any{
 					"status":    string(statusSuccess),
 					"artifacts": arts,
