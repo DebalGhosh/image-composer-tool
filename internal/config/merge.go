@@ -189,7 +189,11 @@ func MergeConfigurations(userTemplate, defaultTemplate *ImageTemplate) (*ImageTe
 
 // RedactSensitiveData creates a copy of the template with sensitive data redacted for safe display or logging.
 // This prevents passwords, keys, and other sensitive information from appearing in logs or user-facing output.
+// Returns nil when template is nil so callers get a normal empty-value path instead of a panic on the deref.
 func RedactSensitiveData(template *ImageTemplate) *ImageTemplate {
+	if template == nil {
+		return nil
+	}
 	// Create a deep copy
 	redacted := *template
 	redacted.SystemConfig = redactSensitiveSystemConfig(template.SystemConfig)
