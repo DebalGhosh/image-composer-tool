@@ -23,8 +23,12 @@ func TestExitCodeForError(t *testing.T) {
 			"post-processing failed: %w",
 			fmt.Errorf("build cancelled: %w", context.Canceled),
 		), signalExitCode},
-		{"context.DeadlineExceeded bare", context.DeadlineExceeded, signalExitCode},
-		{"context.DeadlineExceeded wrapped", fmt.Errorf("timeout: %w", context.DeadlineExceeded), signalExitCode},
+		// DeadlineExceeded is NOT user-initiated cancel — it comes from an
+		// internal timeout such as PostProcess's detached cleanup budget.
+		// Callers scripting around the tool need this distinct from a signal,
+		// so it maps to the generic-failure exit (1), not signalExitCode.
+		{"context.DeadlineExceeded bare", context.DeadlineExceeded, 1},
+		{"context.DeadlineExceeded wrapped", fmt.Errorf("timeout: %w", context.DeadlineExceeded), 1},
 		{"generic error", errors.New("something else went wrong"), 1},
 		{"wrapped generic error", fmt.Errorf("build: %w", errors.New("mmdebstrap failed")), 1},
 	}

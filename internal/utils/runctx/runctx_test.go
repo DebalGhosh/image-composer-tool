@@ -365,3 +365,52 @@ func TestRegister_ConcurrentDoesNotRace(t *testing.T) {
 		t.Fatalf("expected empty residual, got %v", residual)
 	}
 }
+
+// TestCoordinator_RegisterRaceWithRun exercises the fired-flag guard against
+// concurrent Register calls. Regression guard against the race Copilot flagged:
+// without the fired-flag being checked under the mutex, a Register could see
+// fired=false, wait on the lock while Run acquires + snapshots + clears entries,
+// then acquire the lock and append its entry to c.entries — the entry sits
+// there forever because Run has already returned.
+//
+// This test is intentionally aggressive under -race: 100 iterations × 20
+// concurrent Registers racing against a delayed Run. Any surviving entry
+// (append-after-snapshot) would either (a) execute in the second Run below,
+// bloating its residual list, or (b) leak silently. The idempotence check
+// asserts the second Run returns nil residual — proving no entries were
+// stranded in the slice after the first Run cleared it.
+func TestCoordinator_RegisterRaceWithRun(t *testing.T) {
+	const iterations = 100
+	const concurrentRegisters = 20
+	for i := 0; i < iterations; i++ {
+		c := New()
+		var wg sync.WaitGroup
+		wg.Add(concurrentRegisters)
+		for j := 0; j < concurrentRegisters; j++ {
+			go func() {
+				defer wg.Done()
+				c.Register("racer", func(context.Context) error { return nil })
+			}()
+		}
+		// Kick Run off concurrently with the Registers so the race window is
+		// maximised. Any per-iteration variability comes from goroutine
+		// scheduling — good, that's what tickles the race.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Run(context.Background())
+		}()
+		wg.Wait()
+
+		// After both waves settle, Run must have fired exactly once and
+		// c.entries must be empty. A stranded append would surface as a
+		// non-empty second Run's residual list.
+		if residual := c.Run(context.Background()); residual != nil {
+			t.Fatalf("iteration %d: second Run should be no-op, got residual: %v",
+				i, residual)
+		}
+		if got := c.Len(); got != 0 {
+			t.Fatalf("iteration %d: expected 0 entries after Run, got %d", i, got)
+		}
+	}
+}

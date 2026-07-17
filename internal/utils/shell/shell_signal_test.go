@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 )
 
 // waitProcessGone polls kill(pid, 0) until the process is gone or the deadline
@@ -244,5 +246,79 @@ func TestApplyExecAttrs_SetsPgidAndCancel(t *testing.T) {
 	// Cancel closure should be safe to call on a not-yet-started cmd (Process nil).
 	if err := cmd.Cancel(); err != nil {
 		t.Fatalf("Cancel on unstarted cmd should return nil, got: %v", err)
+	}
+}
+
+// TestCleanupCallback_ReceivesFreshCtxNotCancelledParent regresses on the
+// defect Copilot flagged: a coordinator-registered cleanup callback that
+// ignored the per-entry ctx and used the ambient parent-bound (already
+// cancelled) ctx for its shell/HTTP work. The Fix A pattern wraps each
+// callback's body with shell.SetContext(ctx) + runctx.SetContext(ctx). This
+// test verifies the wrapper's contract:
+//
+//  1. Register a callback with a fresh Coordinator.
+//  2. Bind an ALREADY-CANCELLED ctx as the ambient shell ctx (simulating the
+//     signal-fired state build.go's cleanup goroutine sees).
+//  3. Call coord.Run(context.Background()) — the coordinator hands the
+//     callback a fresh per-entry timeout ctx.
+//  4. Inside the callback, apply the Fix A wrapper and inspect the ambient
+//     shell.ctxOrBackground() — it must be the fresh entry ctx, NOT the
+//     cancelled parent, and it must not be cancelled.
+func TestCleanupCallback_ReceivesFreshCtxNotCancelledParent(t *testing.T) {
+	// Simulate the "signal fired" state: bind a cancelled ctx as ambient.
+	cancelledCtx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	restoreParent := SetContext(cancelledCtx)
+	defer restoreParent()
+
+	// Sanity: without the Fix A wrapper, a callback would observe this
+	// cancelled ctx via ctxOrBackground().
+	if ctxOrBackground().Err() == nil {
+		t.Fatalf("test setup: expected ambient ctx to be cancelled before Register")
+	}
+
+	// Coordinator with one callback that captures what it sees.
+	coord := runctx.New()
+	var observedShellErr error
+	var observedShellCtxSameAsEntry bool
+	coord.Register("test", func(entryCtx context.Context) error {
+		// Fix A pattern — the exact shape used in loopdev.go and chrootenv.go.
+		restoreShell := SetContext(entryCtx)
+		defer restoreShell()
+		restoreRun := runctx.SetContext(entryCtx)
+		defer restoreRun()
+
+		// Read back the ambient shell ctx from inside the wrapper. This is
+		// what LoopSetupDelete/CleanupChrootEnv's shell.ExecCmd calls see.
+		got := ctxOrBackground()
+		observedShellErr = got.Err()
+		observedShellCtxSameAsEntry = got == entryCtx
+		return nil
+	})
+
+	// Fire the coordinator with a context.Background() ctx — the caller
+	// context is irrelevant per Run's contract; each entry gets a fresh
+	// per-entry timeout ctx.
+	if residual := coord.Run(context.Background()); len(residual) != 0 {
+		t.Fatalf("expected clean run, got residual: %v", residual)
+	}
+
+	// Assertions:
+	// 1. The shell ctx inside the callback must not have been the cancelled parent.
+	if observedShellErr != nil {
+		t.Fatalf("Fix A regression: callback observed shell ctx with Err %v — should be nil (fresh per-entry ctx)", observedShellErr)
+	}
+	// 2. It must have been exactly the entry ctx the coordinator handed in.
+	if !observedShellCtxSameAsEntry {
+		t.Fatalf("Fix A regression: callback's shell ctx was not the per-entry ctx — SetContext binding did not take")
+	}
+	// 3. After the callback returns, the ambient shell ctx must be back to
+	//    the cancelled parent (restore fired). This guards against a defer
+	//    order bug in the wrapper.
+	if ctxOrBackground().Err() == nil {
+		t.Fatalf("Fix A regression: ambient shell ctx not restored to cancelled parent after callback")
+	}
+	if ctxOrBackground() != cancelledCtx {
+		t.Fatalf("Fix A regression: ambient shell ctx after callback = %v, want cancelledCtx", ctxOrBackground())
 	}
 }

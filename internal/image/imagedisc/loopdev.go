@@ -70,13 +70,23 @@ func loopSetupCreate(imagePath string) (string, func(), error) {
 	// best-effort under a torn-down chroot: a still-mounted partition
 	// prevents detach and the coordinator surfaces the error in its
 	// residual list, but it won't wedge the coordinator.
+	//
+	// The callback receives the coordinator's per-entry timeout ctx
+	// (see runctx.Coordinator.Run). Bind that ctx to the shell and
+	// runctx layers for the callback's duration so LoopSetupDelete's
+	// shell.ExecCmd calls run under the cleanup budget instead of the
+	// already-cancelled parent ctx that fired the coordinator.
 	unregister := func() {}
 	if c := runctx.Get(); c != nil {
 		devPath := loopDevPath
 		loopDev := &LoopDev{}
 		unregister = c.Register(
 			"loop:"+devPath,
-			func(context.Context) error {
+			func(ctx context.Context) error {
+				restoreShell := shell.SetContext(ctx)
+				defer restoreShell()
+				restoreRun := runctx.SetContext(ctx)
+				defer restoreRun()
 				return loopDev.LoopSetupDelete(devPath)
 			},
 		)

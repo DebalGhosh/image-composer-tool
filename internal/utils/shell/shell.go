@@ -40,6 +40,16 @@ var currentCtx atomic.Value // holds ctxHolder
 // SetContext binds ctx as the ambient context used by every subsequent shell
 // command. The returned restore function reverts to whatever ctx was bound
 // before (or unbound state) — call it via defer.
+//
+// Concurrency: the returned restore closure captures the previous binding at
+// call time, so nested SetContext/restore pairs must be strictly LIFO on a
+// single goroutine. The current build path (executeBuild → PostProcess
+// wrapper → cleanup coordinator callbacks) satisfies this — only the main
+// build goroutine invokes SetContext at any given time. If a future in-process
+// caller invokes SetContext from multiple goroutines concurrently (e.g. an
+// HTTP handler that dispatches a build in-process), the restore-chain will
+// clobber and this needs to be replaced with a ctx-holder passed explicitly
+// through the call graph instead of stored in an atomic global.
 func SetContext(ctx context.Context) (restore func()) {
 	if ctx == nil {
 		ctx = context.Background()

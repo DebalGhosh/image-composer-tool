@@ -467,9 +467,21 @@ func (chrootEnv *ChrootEnv) InitChrootEnv(targetOs, targetDist, targetArch strin
 		// (os.Stat early-out on a missing chroot root), so double-running
 		// on the normal-return path is safe.
 		if c := runctx.Get(); c != nil {
+			// Bind the coordinator's per-entry timeout ctx to shell and runctx
+			// so CleanupChrootEnv's internal shell.ExecCmd calls (umount,
+			// swapoff, rm -rf of the repo-config-backup dir, StopGPGComponents)
+			// run under the cleanup budget instead of the already-cancelled
+			// parent ctx. Without this the coordinator's guarantee — cleanup
+			// isn't cancelled by the signal that fired it — is defeated
+			// silently because every shell call short-circuits with
+			// context.Canceled at execCmdWithRetry's loop-head.
 			c.Register(
 				"chroot:"+chrootEnv.ChrootEnvRoot,
-				func(context.Context) error {
+				func(ctx context.Context) error {
+					restoreShell := shell.SetContext(ctx)
+					defer restoreShell()
+					restoreRun := runctx.SetContext(ctx)
+					defer restoreRun()
 					return chrootEnv.CleanupChrootEnv(targetOs, targetDist, targetArch)
 				},
 			)

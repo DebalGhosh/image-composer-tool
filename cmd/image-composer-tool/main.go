@@ -69,8 +69,11 @@ func main() {
 // process exit code:
 //   - nil                    → 0    (success)
 //   - context.Canceled       → 130  (SIGINT/SIGTERM cooperative cancel)
-//   - context.DeadlineExceeded → 130 (deadline surfaced from a bounded ctx)
-//   - anything else          → 1    (pre-existing failure semantics)
+//   - anything else          → 1    (pre-existing failure semantics,
+//     including context.DeadlineExceeded surfaced by an internal timeout
+//     such as PostProcess's detached cleanup budget — those are not
+//     user-initiated cancellations and callers scripting around the tool
+//     need to distinguish them from a Ctrl+C)
 //
 // Extracted from main so tests can exercise the mapping without spawning
 // a subprocess or invoking os.Exit.
@@ -78,7 +81,7 @@ func exitCodeForError(err error) int {
 	if err == nil {
 		return 0
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) {
 		return signalExitCode
 	}
 	return 1

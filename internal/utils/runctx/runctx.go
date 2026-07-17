@@ -46,9 +46,13 @@ type Coordinator struct {
 	mu      sync.Mutex
 	entries []entry
 	nextID  uint64
-	// run is set once by Run to prevent late Register calls from silently
-	// disappearing after the coordinator has already fired.
-	fired atomic.Bool
+	// fired is set once by Run to prevent late Register calls from silently
+	// disappearing after the coordinator has already fired. Protected by mu:
+	// Register's fired-check and entries-append must be atomic together, or
+	// a Register call that read fired==false before Run's snapshot could
+	// append its entry to c.entries after Run cleared them — the entry
+	// would sit forever in the slice and never run.
+	fired bool
 }
 
 // New constructs an empty coordinator.
@@ -65,11 +69,12 @@ func (c *Coordinator) Register(label string, fn CleanupFunc) (unregister func())
 	if c == nil || fn == nil {
 		return func() {}
 	}
-	if c.fired.Load() {
-		return func() {}
-	}
 
 	c.mu.Lock()
+	if c.fired {
+		c.mu.Unlock()
+		return func() {}
+	}
 	c.nextID++
 	id := c.nextID
 	c.entries = append(c.entries, entry{id: id, label: label, fn: fn})
@@ -99,11 +104,13 @@ func (c *Coordinator) Run(ctx context.Context) []string {
 	if c == nil {
 		return nil
 	}
-	if !c.fired.CompareAndSwap(false, true) {
-		return nil
-	}
 
 	c.mu.Lock()
+	if c.fired {
+		c.mu.Unlock()
+		return nil
+	}
+	c.fired = true
 	// Copy so we can release the lock before invoking user callbacks.
 	pending := make([]entry, len(c.entries))
 	copy(pending, c.entries)
@@ -190,6 +197,16 @@ var currentCtx atomic.Value // holds ctxHolder
 // This is separate from the shell.SetContext binding by design: pkgfetcher
 // and similar pure-Go paths need ctx for cooperative HTTP cancellation, and
 // build.go installs both bindings from the same source ctx in Phase 4.
+//
+// Concurrency: the returned restore closure captures the previous binding at
+// call time, so nested SetContext/restore pairs must be strictly LIFO on a
+// single goroutine. The current build path (executeBuild → PostProcess
+// wrapper → cleanup coordinator callbacks) satisfies this — only the main
+// build goroutine invokes SetContext at any given time. If a future in-process
+// caller invokes SetContext from multiple goroutines concurrently (e.g. an
+// HTTP handler that dispatches a build in-process), the restore-chain will
+// clobber and this needs to be replaced with a ctx-holder passed explicitly
+// through the call graph instead of stored in an atomic global.
 func SetContext(ctx context.Context) (restore func()) {
 	if ctx == nil {
 		ctx = context.Background()

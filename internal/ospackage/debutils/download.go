@@ -773,8 +773,11 @@ func checkFileExists(url string) (bool, error) {
 		return exists, nil
 	}
 
-	// Create a context with timeout for the request
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create a context with timeout for the request, parented on the ambient
+	// run-scoped ctx so a SIGINT/SIGTERM during a large fan-out of HEAD checks
+	// (overlay/create modes) cancels the in-flight requests within the 30s
+	// budget instead of running each one to completion.
+	ctx, cancel := context.WithTimeout(runctx.Context(), 30*time.Second)
 	defer cancel()
 
 	client := network.NewSecureHTTPClient()
