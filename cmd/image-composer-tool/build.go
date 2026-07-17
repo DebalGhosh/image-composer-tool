@@ -178,6 +178,12 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 	ctx, cancelCtx := context.WithCancel(parentCtx)
 	restoreShellCtx := shell.SetContext(ctx)
 	defer restoreShellCtx()
+	// Also bind the run-scoped ctx for pure-Go code paths that cannot observe
+	// subprocess-level cancellation from the shell layer — chief among them
+	// pkgfetcher's parallel HTTP downloads, which otherwise wedge the process
+	// after SIGINT because http.Client.Get doesn't observe ctx.
+	restoreRunCtx := runctx.SetContext(ctx)
+	defer restoreRunCtx()
 
 	// Install a per-build cleanup coordinator. Resources acquired during
 	// PreProcess/BuildImage (chroot mounts, loop devices) register their
@@ -302,9 +308,11 @@ post:
 		// fail-fast with context.Canceled. Bind a detached, timeout-only ctx for
 		// the duration so cleanup actually completes even when a signal fired.
 		postCtx, postCancel := context.WithTimeout(context.Background(), postProcessCleanupBudget)
-		restorePost := shell.SetContext(postCtx)
+		restorePostShell := shell.SetContext(postCtx)
+		restorePostRun := runctx.SetContext(postCtx)
 		postErr := p.PostProcess(template, buildErr)
-		restorePost()
+		restorePostRun()
+		restorePostShell()
 		postCancel()
 		if postErr != nil {
 			// In --no-cache mode the deferred cleanup would otherwise remove the unique

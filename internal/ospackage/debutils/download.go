@@ -20,6 +20,7 @@ import (
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage/pkgsorter"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/network"
+	"github.com/open-edge-platform/image-composer-tool/internal/utils/runctx"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/slice"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/system"
 )
@@ -1196,7 +1197,7 @@ func downloadPackagesComplete(pkgList []string, destDir, dotFile string, pkgSour
 
 	// Download packages using configured workers and cache directory
 	log.Infof("downloading %d packages to %s using %d workers", len(urls), absDestDir, config.Workers())
-	if err := pkgfetcher.FetchPackages(urls, absDestDir, config.Workers()); err != nil {
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, absDestDir, config.Workers()); err != nil {
 		return downloadPkgList, nil, fmt.Errorf("fetch failed: %w", err)
 	}
 	log.Info("all downloads complete")

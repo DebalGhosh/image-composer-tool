@@ -296,6 +296,52 @@ func TestRegister_NilCoordinatorIsNoop(t *testing.T) {
 	}
 }
 
+// TestSetContext_BindsAndRestores verifies the SetContext accessor mirrors
+// shell.SetContext ergonomics: a bound ctx is returned by Context(); the
+// restore closure reverts to the previous binding (or Background if none).
+func TestSetContext_BindsAndRestores(t *testing.T) {
+	if got := Context(); got != context.Background() {
+		t.Fatalf("expected clean initial ctx to be Background, got %T", got)
+	}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	restore1 := SetContext(ctx1)
+	if got := Context(); got != ctx1 {
+		t.Fatalf("expected ctx1 bound after first SetContext")
+	}
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	restore2 := SetContext(ctx2)
+	if got := Context(); got != ctx2 {
+		t.Fatalf("expected ctx2 bound after nested SetContext")
+	}
+
+	restore2()
+	if got := Context(); got != ctx1 {
+		t.Fatalf("expected ctx1 restored after inner restore")
+	}
+
+	restore1()
+	if got := Context(); got != context.Background() {
+		t.Fatalf("expected Background restored after outer restore")
+	}
+}
+
+// TestSetContext_NilCtxTreatedAsBackground ensures SetContext(nil) is safe
+// and equivalent to Background — mirrors shell.SetContext semantics. Calling
+// with an explicit nil is a defensive path (a nil ctx would be a bug in the
+// caller); staticcheck flags it, hence the nolint.
+func TestSetContext_NilCtxTreatedAsBackground(t *testing.T) {
+	var nilCtx context.Context //nolint:staticcheck // exercising nil-safety guard
+	restore := SetContext(nilCtx)
+	defer restore()
+	if got := Context(); got != context.Background() {
+		t.Fatalf("expected SetContext(nil) to bind Background, got %T", got)
+	}
+}
+
 // TestRegister_ConcurrentDoesNotRace exercises the mutex — multiple
 // goroutines register simultaneously; Run then invokes all in some LIFO
 // order. Race detector catches any missed lock.

@@ -174,3 +174,43 @@ func Get() *Coordinator {
 	}
 	return nil
 }
+
+// ctxHolder wraps a context.Context so atomic.Value sees a single concrete
+// type across the different concrete ctx implementations (*cancelCtx,
+// *timerCtx, *emptyCtx, *valueCtx). Mirrors the shell package's approach.
+type ctxHolder struct{ ctx context.Context }
+
+var currentCtx atomic.Value // holds ctxHolder
+
+// SetContext binds ctx as the ambient run-scoped context that pure-Go code
+// paths (which cannot observe subprocess cancellation from the shell layer)
+// can consult via Context(). Returns a restore closure so callers can revert
+// on defer — matches shell.SetContext ergonomics.
+//
+// This is separate from the shell.SetContext binding by design: pkgfetcher
+// and similar pure-Go paths need ctx for cooperative HTTP cancellation, and
+// build.go installs both bindings from the same source ctx in Phase 4.
+func SetContext(ctx context.Context) (restore func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prev := currentCtx.Load()
+	currentCtx.Store(ctxHolder{ctx: ctx})
+	return func() {
+		if prev == nil {
+			currentCtx.Store(ctxHolder{ctx: context.Background()})
+			return
+		}
+		currentCtx.Store(prev)
+	}
+}
+
+// Context returns the currently bound run-scoped context, or context.Background
+// if none is set. Callers outside a build (unit tests, non-build subcommands)
+// receive Background and behave as they did before.
+func Context() context.Context {
+	if v := currentCtx.Load(); v != nil {
+		return v.(ctxHolder).ctx
+	}
+	return context.Background()
+}
