@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -18,6 +21,81 @@ import (
 const HostPath string = "/"
 
 var log = logger.Logger()
+
+// currentCtx is the ctx bound by SetContext for the lifetime of a run.
+// Reads happen at every command spawn; writes happen only from executeBuild
+// on the main goroutine before any worker starts, so atomic.Value is sufficient.
+// When unset, ctxOrBackground returns context.Background so the four Exec*
+// entry points continue to work for non-build commands (validate, inspect, etc.)
+// and for tests that never call SetContext.
+//
+// The value is wrapped in ctxHolder so atomic.Value always sees a single
+// concrete type — bare context.Context values are interface-typed and stem
+// from different concrete implementations (*emptyCtx, *cancelCtx, *timerCtx,
+// *valueCtx), which would trip atomic.Value's identical-type invariant.
+type ctxHolder struct{ ctx context.Context }
+
+var currentCtx atomic.Value // holds ctxHolder
+
+// SetContext binds ctx as the ambient context used by every subsequent shell
+// command. The returned restore function reverts to whatever ctx was bound
+// before (or unbound state) — call it via defer.
+func SetContext(ctx context.Context) (restore func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prev := currentCtx.Load()
+	currentCtx.Store(ctxHolder{ctx: ctx})
+	return func() {
+		if prev == nil {
+			currentCtx.Store(ctxHolder{ctx: context.Background()})
+			return
+		}
+		currentCtx.Store(prev)
+	}
+}
+
+// ctxOrBackground returns the currently bound context, or context.Background
+// if SetContext has never been called.
+func ctxOrBackground() context.Context {
+	if v := currentCtx.Load(); v != nil {
+		return v.(ctxHolder).ctx
+	}
+	return context.Background()
+}
+
+// applyExecAttrs configures a spawned command so that (a) it runs in its own
+// process group so a single kill(-pgid) reaps every descendant (bash, sudo, and
+// the real tool), (b) ctx cancellation sends SIGTERM to that whole group, and
+// (c) if the group hasn't exited within waitDelay we escalate to SIGKILL via
+// the runtime's automatic behavior. All four spawn sites use this to keep the
+// pgid/kill semantics identical across ExecCmd, ExecCmdSilent, ExecCmdWithStream,
+// and ExecCmdWithInput.
+const execCmdWaitDelay = 5 * time.Second
+
+func applyExecAttrs(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = execCmdWaitDelay
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled first; returns ctx.Err on
+// cancel so the caller's retry loop can exit early.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 var (
 	aptLockRetryAttempts = 20
@@ -537,7 +615,8 @@ func (d *DefaultExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath str
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
@@ -588,7 +667,11 @@ func logAptRetry(attempt int, output string) {
 }
 
 func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -597,14 +680,17 @@ func (d *DefaultExecutor) execCmdWithRetry(cmdStr, fullCmdStr string) (string, e
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute command after retries")
 }
 
 func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
@@ -623,7 +709,11 @@ func (d *DefaultExecutor) execCmdOnce(fullCmdStr string) (string, error) {
 }
 
 func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (string, error) {
+	ctx := ctxOrBackground()
 	for attempt := 1; attempt <= aptLockRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("execution cancelled before attempt %d: %w", attempt, err)
+		}
 		outputStr, err := d.execCmdWithStreamOnce(fullCmdStr)
 		if err == nil {
 			return outputStr, nil
@@ -632,14 +722,17 @@ func (d *DefaultExecutor) execCmdWithStreamRetry(cmdStr, fullCmdStr string) (str
 			return outputStr, err
 		}
 		logAptRetry(attempt, outputStr)
-		time.Sleep(aptLockRetryDelay)
+		if sleepErr := sleepCtx(ctx, aptLockRetryDelay); sleepErr != nil {
+			return outputStr, fmt.Errorf("execution cancelled during retry backoff: %w", sleepErr)
+		}
 	}
 
 	return "", fmt.Errorf("failed to execute streamed command after retries")
 }
 
 func (d *DefaultExecutor) execCmdWithStreamOnce(fullCmdStr string) (string, error) {
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("failed to get stdout pipe for command %s: %w", fullCmdStr, err)
@@ -710,7 +803,8 @@ func (d *DefaultExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo 
 		return "", fmt.Errorf("failed to get full command string: %w", err)
 	}
 
-	cmd := exec.Command("bash", "-c", fullCmdStr)
+	cmd := exec.CommandContext(ctxOrBackground(), "bash", "-c", fullCmdStr)
+	applyExecAttrs(cmd)
 	cmd.Stdin = strings.NewReader(inputStr)
 
 	output, err := cmd.CombinedOutput()
