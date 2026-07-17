@@ -280,6 +280,7 @@ type FDEConfig struct {
 	Enabled    bool     `yaml:"enabled"`              // Enabled: whether full-disk encryption is enabled (default: false)
 	Passphrase string   `yaml:"passphrase,omitempty"` // Passphrase: passphrase used to unlock the encrypted volume
 	Partitions []string `yaml:"partitions,omitempty"` // Partitions: disk partition IDs to encrypt (e.g., "rootfs", "userdata")
+	Unlock     string   `yaml:"unlock,omitempty"`     // Unlock: boot unlock mode, "auto" (keyfile, no prompt; default) or "manual" (interactive passphrase)
 }
 
 // SystemConfig represents a system configuration within the template
@@ -862,6 +863,22 @@ func (t *ImageTemplate) GetFDEPassphrase() string {
 // GetFDEPartitions returns the list of partition IDs to encrypt.
 func (t *ImageTemplate) GetFDEPartitions() []string {
 	return t.SystemConfig.FDE.Partitions
+}
+
+// GetFDEUnlockMode returns the boot unlock mode for full-disk encryption. It
+// defaults to "auto" (keyfile-based, no prompt); only an explicit "manual"
+// selects interactive passphrase unlock.
+func (t *ImageTemplate) GetFDEUnlockMode() string {
+	if t.SystemConfig.FDE.Unlock == "manual" {
+		return "manual"
+	}
+	return "auto"
+}
+
+// IsFDEAutoUnlock reports whether FDE is enabled and set to automatic
+// (keyfile-based) unlock at boot.
+func (t *ImageTemplate) IsFDEAutoUnlock() bool {
+	return t.IsFDEEnabled() && t.GetFDEUnlockMode() == "auto"
 }
 
 // IsFDEPartition reports whether the given partition ID is marked for encryption.

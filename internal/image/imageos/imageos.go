@@ -1474,12 +1474,17 @@ func fdeTargetPartitionIDs(template *config.ImageTemplate) []string {
 
 // wireFDEBoot performs all boot-side wiring for full-disk encryption in one
 // place. For every partition encrypted by enablingFDE it discovers the LUKS
-// header UUID and:
-//   - adds "rd.luks.uuid=/rd.luks.name=" to the kernel command line so the
-//     initramfs unlocks the container at boot (interactive passphrase prompt);
-//   - points the root device at the decrypted mapper (or, when dm-verity is
-//     enabled, points systemd.verity_root_data at it for a verity-on-LUKS chain);
-//   - writes /etc/crypttab entries for any non-root volumes (unlocked post-boot).
+// header UUID and, depending on the unlock mode:
+//   - auto (default): writes the template passphrase to a shared keyfile, adds it
+//     as an additional LUKS keyslot on each volume, and embeds the keyfile in the
+//     initramfs so boot unlocks with no prompt. The original passphrase keyslot
+//     from build-time encryption is preserved.
+//   - manual: adds "rd.luks.uuid=/rd.luks.name=" for root and /etc/crypttab
+//     "none" entries for non-root volumes, so boot prompts for the passphrase.
+//
+// In both modes it points the root device at the decrypted mapper (or, when
+// dm-verity is enabled, points systemd.verity_root_data at it for a
+// verity-on-LUKS chain).
 //
 // It must run after the boot config (cmdline.conf) is generated and before the
 // UKI embeds it, while the LUKS mappers are still open.
@@ -1493,11 +1498,20 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 		return fmt.Errorf("FDE is enabled but no target partition could be determined")
 	}
 
-	rootID := ""
-	for _, p := range template.GetDiskConfig().Partitions {
-		if p.MountPoint == "/" {
-			rootID = p.ID
-			break
+	rootID := fdeRootPartitionID(template)
+	auto := template.IsFDEAutoUnlock()
+	passphrase := template.GetFDEPassphrase()
+
+	// In auto mode a single shared keyfile unlocks every listed partition.
+	keyfileChroot, keyfileHost := "", ""
+	if auto {
+		if passphrase == "" {
+			return fmt.Errorf("FDE auto unlock requires a passphrase in the template")
+		}
+		var err error
+		keyfileChroot, keyfileHost, err = generateFDEKeyfile(installRoot, passphrase)
+		if err != nil {
+			return fmt.Errorf("failed to generate FDE keyfile: %w", err)
 		}
 	}
 
@@ -1532,13 +1546,30 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 		}
 		uuid := strings.TrimSpace(uuidOut)
 
-		luksParams = append(luksParams,
-			fmt.Sprintf("rd.luks.uuid=%s", uuid),
-			fmt.Sprintf("rd.luks.name=%s=%s", uuid, id))
+		// keySpec is the crypttab key field: the shared keyfile path (auto) or
+		// "none" (manual). In auto mode the same keyfile is registered into every
+		// partition's LUKS keyslot.
+		keySpec := "none"
+		if auto {
+			if err := addFDEKeyToDevice(backing, keyfileHost, passphrase); err != nil {
+				return fmt.Errorf("failed to add keyfile keyslot for %q: %w", id, err)
+			}
+			keySpec = keyfileChroot
+		}
+
 		if id == rootID {
 			rootMapper = mapperPath // /dev/mapper/<id>
+			luksParams = append(luksParams,
+				fmt.Sprintf("rd.luks.uuid=%s", uuid),
+				fmt.Sprintf("rd.luks.name=%s=%s", uuid, id))
+			if auto {
+				// Point the initramfs at the embedded keyfile and mirror the
+				// entry into crypttab (also baked into the initramfs).
+				luksParams = append(luksParams, fmt.Sprintf("rd.luks.key=%s", keySpec))
+				crypttabLines = append(crypttabLines, fmt.Sprintf("%s UUID=%s %s luks,discard", id, uuid, keySpec))
+			}
 		} else {
-			crypttabLines = append(crypttabLines, fmt.Sprintf("%s UUID=%s none luks,discard", id, uuid))
+			crypttabLines = append(crypttabLines, fmt.Sprintf("%s UUID=%s %s luks,discard", id, uuid, keySpec))
 		}
 	}
 
@@ -1562,7 +1593,8 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 		return fmt.Errorf("failed to write cmdline %s: %w", cmdlinePath, err)
 	}
 
-	// Non-root encrypted volumes are unlocked after switch-root via crypttab.
+	// Write /etc/crypttab: in auto mode this includes the root entry (embedded
+	// into the initramfs) plus non-root volumes; in manual mode only non-root.
 	if len(crypttabLines) > 0 {
 		crypttabPath := filepath.Join(installRoot, "etc", "crypttab")
 		if err := file.Write(strings.Join(crypttabLines, "\n")+"\n", crypttabPath); err != nil {
@@ -1570,7 +1602,49 @@ func wireFDEBoot(installRoot string, diskPathIdMap map[string]string, template *
 		}
 	}
 
-	log.Infof("Wired FDE boot parameters for image: %s", template.GetImageName())
+	log.Infof("Wired FDE boot parameters (%s unlock) for image: %s", template.GetFDEUnlockMode(), template.GetImageName())
+	return nil
+}
+
+// fdeRootPartitionID returns the ID of the partition mounted at "/", or "" if none.
+func fdeRootPartitionID(template *config.ImageTemplate) string {
+	for _, p := range template.GetDiskConfig().Partitions {
+		if p.MountPoint == "/" {
+			return p.ID
+		}
+	}
+	return ""
+}
+
+// fdeKeyfilePath is the in-image path of the single shared LUKS keyfile used for
+// automatic unlock of every encrypted partition.
+const fdeKeyfilePath = "/etc/cryptsetup-keys.d/fde.key"
+
+// generateFDEKeyfile writes the template passphrase into the shared keyfile inside
+// the image root (mode 0400) and returns its chroot-relative path (for crypttab/
+// initramfs) and host path (for cryptsetup). The passphrase value is never logged.
+func generateFDEKeyfile(installRoot, passphrase string) (chrootPath, hostPath string, err error) {
+	keyDirHost := filepath.Join(installRoot, "etc", "cryptsetup-keys.d")
+	hostPath = filepath.Join(keyDirHost, "fde.key")
+
+	if err = os.MkdirAll(keyDirHost, 0700); err != nil {
+		return "", "", fmt.Errorf("failed to create key directory: %w", err)
+	}
+	if err = os.WriteFile(hostPath, []byte(passphrase), 0400); err != nil {
+		return "", "", fmt.Errorf("failed to write keyfile: %w", err)
+	}
+
+	return fdeKeyfilePath, hostPath, nil
+}
+
+// addFDEKeyToDevice registers the shared keyfile in a new keyslot on the LUKS
+// backing device, authenticating with the passphrase (which is preserved as a
+// manual fallback keyslot).
+func addFDEKeyToDevice(backing, keyfileHost, passphrase string) error {
+	addCmd := fmt.Sprintf("cryptsetup luksAddKey --key-file - %s %s", shell.QuoteArg(backing), shell.QuoteArg(keyfileHost))
+	if _, err := shell.ExecCmdWithInput(passphrase, addCmd, true, shell.HostPath, nil); err != nil {
+		return fmt.Errorf("failed to add keyfile keyslot: %w", err)
+	}
 	return nil
 }
 
@@ -1792,6 +1866,14 @@ func updateInitramfs(installRoot, kernelVersion string, template *config.ImageTe
 		// FDE needs the crypt/dm modules so the initramfs can unlock LUKS at boot.
 		cmdParts = append(cmdParts, "--add", "dm")
 		cmdParts = append(cmdParts, "--add", "crypt")
+	}
+
+	// For automatic (keyfile) unlock, embed crypttab and the shared keyfile into
+	// the initramfs so it can unlock the root volume without a prompt. dracut
+	// runs in-chroot, so these paths are relative to the image root.
+	if template.IsFDEAutoUnlock() {
+		cmdParts = append(cmdParts, "--install", "/etc/crypttab")
+		cmdParts = append(cmdParts, "--install", fdeKeyfilePath)
 	}
 
 	// Add cut utility for EMT images only

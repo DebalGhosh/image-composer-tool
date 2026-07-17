@@ -267,7 +267,7 @@ func mergeSystemConfig(defaultConfig, userConfig SystemConfig) SystemConfig {
 
 	// Merge FDE config - defaults do not define FDE, so take the user's config
 	// whenever any FDE field was provided.
-	if userConfig.FDE.Enabled || userConfig.FDE.Passphrase != "" || len(userConfig.FDE.Partitions) > 0 {
+	if userConfig.FDE.Enabled || userConfig.FDE.Passphrase != "" || len(userConfig.FDE.Partitions) > 0 || userConfig.FDE.Unlock != "" {
 		merged.FDE = userConfig.FDE
 	}
 

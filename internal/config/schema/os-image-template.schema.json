@@ -236,6 +236,11 @@
           "type": "array",
           "description": "Disk partition IDs to encrypt (e.g., \"rootfs\", \"userdata\")",
           "items": { "type": "string" }
+        },
+        "unlock": {
+          "type": "string",
+          "description": "Boot unlock mode: \"auto\" (keyfile embedded in initramfs, no prompt; default) or \"manual\" (interactive passphrase)",
+          "enum": ["auto", "manual"]
         }
       },
       "required": ["enabled"],
