@@ -172,43 +172,50 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
-	// Derive a cancellable child so we can tear down the cleanup goroutine
-	// on the normal-return path — without this, that goroutine would leak
-	// for the process lifetime (and forever in unit tests).
+	// Derive a cancellable child ctx and bind it to the shell and run-scoped
+	// layers so every spawned command (and pure-Go HTTP path such as
+	// pkgfetcher's parallel downloads, which otherwise wedge the process after
+	// SIGINT because http.Client.Get doesn't observe ctx) observes a signal
+	// cancel. cancelCtx on return is plain context hygiene — no goroutine
+	// depends on it.
 	ctx, cancelCtx := context.WithCancel(parentCtx)
+	defer cancelCtx()
 	restoreShellCtx := shell.SetContext(ctx)
 	defer restoreShellCtx()
-	// Also bind the run-scoped ctx for pure-Go code paths that cannot observe
-	// subprocess-level cancellation from the shell layer — chief among them
-	// pkgfetcher's parallel HTTP downloads, which otherwise wedge the process
-	// after SIGINT because http.Client.Get doesn't observe ctx.
 	restoreRunCtx := runctx.SetContext(ctx)
 	defer restoreRunCtx()
 
 	// Install a per-build cleanup coordinator. Resources acquired during
-	// PreProcess/BuildImage (chroot mounts, loop devices) register their
-	// idempotent teardown here so a mid-build signal reaps them even when
-	// the goto post path in this function is bypassed.
+	// PreProcess/BuildImage (chroot mounts, loop devices) register an
+	// idempotent teardown here. On the normal unwind each resource is torn
+	// down and unregistered by its own defer / PostProcess; the coordinator is
+	// a synchronous backstop that reaps anything the structured unwind missed
+	// (chiefly a signal-cancelled build's leaked mounts/loops).
 	coord := runctx.New()
 	runctx.Set(coord)
 	defer runctx.Clear()
 
-	// Background driver: on signal, walk the coordinator's LIFO chain under
-	// a fresh per-entry timeout so cleanup itself is not cancelled by the
-	// same ctx that fired. The goroutine's <-ctx.Done() fires once — either
-	// via a real signal (parent ctx cancelled) or via cancelCtx() on the
-	// normal-return path, in which case parentCtx.Err() == nil and the
-	// goroutine skips the cleanup work. A second signal is escalated to
-	// os.Exit(130) by main's hard-exit goroutine, not this one.
-	cleanupDone := make(chan struct{})
-	go func() {
-		defer close(cleanupDone)
-		<-ctx.Done()
+	// Backstop cleanup runs on return via defer, so it executes on the SAME
+	// goroutine as the unwind — after PostProcess and every BuildImage-internal
+	// loop-detach defer, but before the --no-cache workspace-removal defer
+	// (registered earlier, so LIFO runs it later; loops are detached before
+	// their backing files are deleted). Running it inline rather than from a
+	// goroutine racing the unwind is what guarantees the coordinator and
+	// PostProcess never operate on the same mount/loop concurrently: no
+	// double-teardown log noise, and an accurate residual report.
+	//
+	// It fires only when a signal cancelled the build (parentCtx.Err() != nil).
+	// On a normal build PostProcess + the loop-detach defers already reaped
+	// everything and CleanupChrootEnv's coordinator entry is intentionally left
+	// registered, so running it would just repeat that idempotent work — skip
+	// it. coord.Run itself is idempotent, so pairing this with PostProcess's
+	// own CleanupChrootEnv on the cancel path is safe: the second call no-ops.
+	defer func() {
 		if parentCtx.Err() == nil {
-			return // normal-return path — nothing to reap
+			return // normal-return path — structured unwind already reaped everything
 		}
 		log := logger.Logger()
-		log.Warnf("build cancelled by signal (%v), running cleanup", parentCtx.Err())
+		log.Warnf("build cancelled by signal (%v), running backstop cleanup", parentCtx.Err())
 		residual := coord.Run(context.Background())
 		if len(residual) == 0 {
 			log.Infof("cleanup complete")
@@ -221,17 +228,6 @@ func executeBuild(cmd *cobra.Command, args []string) error {
 		log.Warnf("some resources may still be held; consider running "+
 			"'mount | grep %s' and 'losetup -l' to identify leftovers",
 			workspaceDirForResidualHint())
-	}()
-	// On any return, cancel the child ctx to release the cleanup goroutine
-	// (which may leave via the "nothing to reap" early-out or after running
-	// registered teardowns) and then wait for it. Ordering matters: this
-	// defer must run in the sequence (cancelCtx → wait), so it lives in a
-	// single func rather than as two separate defers where LIFO would
-	// deadlock — <-cleanupDone would block waiting for a cancelCtx that
-	// hadn't fired yet.
-	defer func() {
-		cancelCtx()
-		<-cleanupDone
 	}()
 
 	var buildErr error
@@ -327,9 +323,8 @@ post:
 
 	// Surface signal cancellation as a distinct error so main can map it to
 	// the conventional exit code (130). Return AFTER PostProcess so any
-	// remaining registered cleanup — and the isolated --no-cache workspace
-	// cleanup defer — still run. The deferred <-cleanupDone above blocks
-	// until the coordinator goroutine finishes reporting its residuals.
+	// remaining registered cleanup — the deferred coordinator backstop and the
+	// isolated --no-cache workspace cleanup defer — still run on the way out.
 	if parentCtx.Err() != nil {
 		return fmt.Errorf("build cancelled: %w", parentCtx.Err())
 	}

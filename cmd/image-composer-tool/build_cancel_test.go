@@ -23,8 +23,9 @@ const testDeadlineBudget = 15 * time.Second
 // is exercised by the shell package's unit tests in Phase 1.
 //
 // This test's primary job is to guarantee the new ctx wiring doesn't itself
-// panic or leak the cleanup goroutine when the ctx is already dead before
-// executeBuild dispatches its first work. Race-clean under -race.
+// panic when the ctx is already dead before executeBuild dispatches its first
+// work, and that the deferred backstop cleanup runs cleanly. Race-clean under
+// -race.
 func TestExecuteBuild_ReturnsCancelledOnPreCancelledContext(t *testing.T) {
 	defer resetBuildFlags()
 
@@ -42,8 +43,8 @@ func TestExecuteBuild_ReturnsCancelledOnPreCancelledContext(t *testing.T) {
 
 	// The failure is either the template-load error path or the post-PostProcess
 	// cancellation path. Either is acceptable — what we care about is that
-	// executeBuild returned within the test-run budget and did not deadlock on
-	// the cleanup goroutine.
+	// executeBuild returned within the test-run budget without panicking in the
+	// deferred backstop cleanup.
 	if !errors.Is(err, context.Canceled) &&
 		!strings.Contains(err.Error(), "loading and merging template") {
 		t.Fatalf("unexpected error shape: %v", err)
@@ -52,17 +53,16 @@ func TestExecuteBuild_ReturnsCancelledOnPreCancelledContext(t *testing.T) {
 
 // TestExecuteBuild_CleanupGoroutineDoesNotLeak wraps the standard invalid-
 // template test — which does NOT cancel the ctx — and asserts the function
-// still returns within a bounded time. If the cleanup goroutine's <-ctx.Done
-// path deadlocked with the deferred wait, this test would hang forever.
-// (go test's timeout catches that at CI granularity, but this makes the
-// intent explicit.)
+// still returns within a bounded time. The backstop cleanup now runs inline on
+// the return path (no goroutine), so this guards against a future regression
+// that reintroduces a blocking wait on the unwind.
 func TestExecuteBuild_CleanupGoroutineDoesNotLeak(t *testing.T) {
 	defer resetBuildFlags()
 
 	cmd := createBuildCommand()
 	// No SetContext: cmd.Context() returns nil; executeBuild falls back to
-	// context.Background(). The deferred cancelCtx must still release the
-	// cleanup goroutine on normal return.
+	// context.Background(). parentCtx.Err() is nil on normal return, so the
+	// deferred backstop early-outs without running the coordinator.
 
 	done := make(chan struct{})
 	go func() {
@@ -72,9 +72,9 @@ func TestExecuteBuild_CleanupGoroutineDoesNotLeak(t *testing.T) {
 
 	select {
 	case <-done:
-		// Success: executeBuild returned without deadlock.
+		// Success: executeBuild returned without blocking.
 	case <-newTestDeadline(t).Done():
-		t.Fatal("executeBuild deadlocked; cleanup goroutine likely blocked on ctx.Done")
+		t.Fatal("executeBuild did not return; backstop cleanup likely blocked")
 	}
 }
 
