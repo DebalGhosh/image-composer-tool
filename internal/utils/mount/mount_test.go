@@ -866,7 +866,7 @@ func TestCleanSysfs(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:       "rm_command_failure",
+			name:       "rmdir_command_failure",
 			mountPoint: "/mnt/chroot",
 			mockCommands: []shell.MockCommand{
 				{Pattern: "mount", Output: "", Error: nil},
