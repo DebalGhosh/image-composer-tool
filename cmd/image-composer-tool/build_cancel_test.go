@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 const testDeadlineBudget = 15 * time.Second
@@ -88,7 +86,3 @@ func newTestDeadline(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
-
-// unused variable holder used to make the ctx-shape build cleanly if a future
-// test dispatches through cobra's Execute path directly.
-var _ = cobra.Command{}

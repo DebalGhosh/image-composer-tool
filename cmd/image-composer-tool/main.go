@@ -87,17 +87,20 @@ func exitCodeForError(err error) int {
 	return 1
 }
 
-// watchForSecondSignal installs an independent signal handler that ignores
-// the first SIGINT/SIGTERM (already consumed by signal.NotifyContext in main)
-// and hard-exits on the second. Runs on its own goroutine for the lifetime
-// of the process; no shutdown handshake is needed because os.Exit tears the
-// process down. Bypasses deferred loggerCleanup — acceptable trade-off for
-// bounded exit when cleanup is wedged.
+// watchForSecondSignal installs an independent signal handler that hard-exits
+// on the second SIGINT/SIGTERM. Go delivers each signal to every channel
+// registered via signal.Notify, so this channel receives the first signal too
+// (in parallel with the one NotifyContext uses to cancel the build ctx in
+// main) — we drain that first delivery and act only on the second. Runs on its
+// own goroutine for the lifetime of the process; no shutdown handshake is
+// needed because os.Exit tears the process down. Bypasses deferred
+// loggerCleanup — acceptable trade-off for a bounded exit when cleanup is
+// wedged.
 func watchForSecondSignal() {
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh // consumed by NotifyContext; we only care about the next one.
-	<-sigCh
+	<-sigCh // first signal: also delivered to NotifyContext's channel; ignore here.
+	<-sigCh // second signal: hard exit.
 	fmt.Fprintln(os.Stderr, "second signal received; exiting immediately")
 	os.Exit(signalExitCode)
 }
