@@ -49,11 +49,21 @@ func withCORS(handler http.Handler, config CORSConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
+		// The response depends on the request Origin, so caches must key on
+		// it. Always advertise this, even when the origin is not allowed.
+		w.Header().Add("Vary", "Origin")
+
 		// Check if the request origin is allowed.
 		if origin != "" && allowedOriginSet[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", methods)
-			w.Header().Set("Access-Control-Allow-Headers", headers)
+
+			// Access-Control-Allow-Methods/Headers are only meaningful on the
+			// preflight (OPTIONS) response; they are ignored on actual
+			// responses, so only set them there.
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", methods)
+				w.Header().Set("Access-Control-Allow-Headers", headers)
+			}
 		}
 
 		// Handle preflight requests: the browser sends an OPTIONS request

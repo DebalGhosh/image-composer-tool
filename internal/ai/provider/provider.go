@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,12 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrProviderUnavailable indicates the AI provider could not be reached
+// (connection refused, DNS failure, TLS error, timeout, etc.). Callers can
+// detect it with errors.Is to map to a PROVIDER_UNAVAILABLE API response,
+// rather than matching on error-message substrings.
+var ErrProviderUnavailable = errors.New("AI provider unavailable")
 
 // EmbeddingProvider defines the interface for generating embeddings.
 type EmbeddingProvider interface {
@@ -118,7 +125,7 @@ func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, err
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call Ollama API: %w", err)
+		return nil, fmt.Errorf("failed to call Ollama API: %w: %v", ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
@@ -187,7 +194,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to call Ollama API: %w", err)
+		return "", fmt.Errorf("failed to call Ollama API: %w: %v", ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
@@ -228,23 +235,31 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/api/chat", bytes.NewReader(jsonBody))
+	// Derive a cancelable context so an idle-stream watchdog can abort a
+	// hung generation even while the client stays connected.
+	streamCtx, cancel := context.WithCancel(ctx)
+
+	req, err := http.NewRequestWithContext(streamCtx, "POST", p.baseURL+"/api/chat", bytes.NewReader(jsonBody))
 	if err != nil {
+		cancel()
 		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Use a client without overall timeout for streaming — context
-	// cancellation handles cleanup if the caller disconnects.
+	// Use a client without an overall timeout: an HTTP-client Timeout would
+	// abort a long-but-healthy stream. The idle watchdog below plus context
+	// cancellation handle cleanup instead.
 	streamClient := &http.Client{}
 	resp, err := streamClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to call Ollama API: %w", err)
+		cancel()
+		return nil, nil, fmt.Errorf("failed to call Ollama API: %w: %v", ErrProviderUnavailable, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		return nil, nil, fmt.Errorf("Ollama API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -252,14 +267,23 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	errc := make(chan error, 1)
 
 	go func() {
+		defer cancel()
 		defer close(tokens)
 		defer resp.Body.Close()
+
+		// Idle watchdog: if no token arrives within the provider's configured
+		// timeout, cancel the context to abort the blocked read. This bounds
+		// the goroutine lifetime when the LLM backend hangs.
+		idle := time.AfterFunc(p.streamIdleTimeout(), cancel)
+		defer idle.Stop()
 
 		scanner := bufio.NewScanner(resp.Body)
 		// Increase buffer for safety (default 64KB is usually fine for chat).
 		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
 
 		for scanner.Scan() {
+			idle.Reset(p.streamIdleTimeout())
+
 			line := scanner.Bytes()
 			if len(line) == 0 {
 				continue
@@ -274,8 +298,8 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 			if chunk.Message.Content != "" {
 				select {
 				case tokens <- chunk.Message.Content:
-				case <-ctx.Done():
-					errc <- ctx.Err()
+				case <-streamCtx.Done():
+					errc <- streamCtx.Err()
 					return
 				}
 			}
@@ -291,6 +315,16 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	}()
 
 	return tokens, errc, nil
+}
+
+// streamIdleTimeout returns the maximum time a stream may go without
+// producing a token before it is aborted. It reuses the provider's configured
+// request timeout, falling back to a sane default if unset.
+func (p *OllamaProvider) streamIdleTimeout() time.Duration {
+	if p.client != nil && p.client.Timeout > 0 {
+		return p.client.Timeout
+	}
+	return 120 * time.Second
 }
 
 // DefaultOpenAIBaseURL is the default base URL for OpenAI API.
@@ -378,7 +412,7 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call OpenAI API: %w", err)
+		return nil, fmt.Errorf("failed to call OpenAI API: %w: %v", ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
@@ -451,7 +485,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []ChatMessage) (stri
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to call OpenAI API: %w", err)
+		return "", fmt.Errorf("failed to call OpenAI API: %w: %v", ErrProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
@@ -505,23 +539,32 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
+	// Derive a cancelable context so an idle-stream watchdog can abort a
+	// hung generation even while the client stays connected.
+	streamCtx, cancel := context.WithCancel(ctx)
+
+	req, err := http.NewRequestWithContext(streamCtx, "POST", p.baseURL+"/v1/chat/completions", bytes.NewReader(jsonBody))
 	if err != nil {
+		cancel()
 		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
-	// Use a client without overall timeout for streaming.
+	// Use a client without an overall timeout: an HTTP-client Timeout would
+	// abort a long-but-healthy stream. The idle watchdog below plus context
+	// cancellation handle cleanup instead.
 	streamClient := &http.Client{}
 	resp, err := streamClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to call OpenAI API: %w", err)
+		cancel()
+		return nil, nil, fmt.Errorf("failed to call OpenAI API: %w: %v", ErrProviderUnavailable, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		return nil, nil, fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -529,13 +572,22 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	errc := make(chan error, 1)
 
 	go func() {
+		defer cancel()
 		defer close(tokens)
 		defer resp.Body.Close()
+
+		// Idle watchdog: if no data arrives within the provider's configured
+		// timeout, cancel the context to abort the blocked read. This bounds
+		// the goroutine lifetime when the LLM backend hangs.
+		idle := time.AfterFunc(p.streamIdleTimeout(), cancel)
+		defer idle.Stop()
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
 
 		for scanner.Scan() {
+			idle.Reset(p.streamIdleTimeout())
+
 			line := scanner.Text()
 
 			// Skip empty lines and non-data lines (SSE format).
@@ -564,8 +616,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 				select {
 				case tokens <- chunk.Choices[0].Delta.Content:
-				case <-ctx.Done():
-					errc <- ctx.Err()
+				case <-streamCtx.Done():
+					errc <- streamCtx.Err()
 					return
 				}
 			}
@@ -577,4 +629,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []ChatMessage)
 	}()
 
 	return tokens, errc, nil
+}
+
+// streamIdleTimeout returns the maximum time a stream may go without
+// producing data before it is aborted. It reuses the provider's configured
+// request timeout, falling back to a sane default if unset.
+func (p *OpenAIProvider) streamIdleTimeout() time.Duration {
+	if p.client != nil && p.client.Timeout > 0 {
+		return p.client.Timeout
+	}
+	return 120 * time.Second
 }

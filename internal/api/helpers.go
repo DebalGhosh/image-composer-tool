@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 )
 
@@ -18,6 +20,29 @@ var requestCounter uint64
 func generateRequestID() string {
 	id := atomic.AddUint64(&requestCounter, 1)
 	return fmt.Sprintf("req_%06d", id)
+}
+
+// pathWithinDir reports whether target resolves to a location inside dir
+// (or dir itself). Both paths are resolved to absolute, cleaned form before
+// comparison so that "../" segments cannot escape the directory. It is used
+// as defense in depth against path traversal in filesystem-backed handlers.
+func pathWithinDir(dir, target string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+
+	rel, err := filepath.Rel(absDir, absTarget)
+	if err != nil {
+		return false
+	}
+	// rel must not climb out of dir (no leading "..") and must not be
+	// an absolute path on another volume.
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // respondJSON writes a JSON response with the given status code.

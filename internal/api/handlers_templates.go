@@ -64,12 +64,31 @@ func handleGetTemplate(s *Server) http.HandlerFunc {
 			return
 		}
 
+		// Reject any name that could escape the templates directory.
+		// {name} must be a bare file name — no path separators, no "..".
+		// This guards against traversal like "..%2fsecret" (URL-decoded to
+		// "../secret") which filepath.Join would otherwise resolve outside
+		// TemplatesDir.
+		if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+			respondError(w, http.StatusBadRequest, ErrCodeTemplateNotFound,
+				"Invalid template name", nil)
+			return
+		}
+
 		// Ensure the name has a .yml extension for file lookup.
 		if !strings.HasSuffix(name, ".yml") {
 			name = name + ".yml"
 		}
 
 		filePath := filepath.Join(s.config.TemplatesDir, name)
+
+		// Defense in depth: verify the cleaned path is still inside the
+		// templates directory before touching the filesystem.
+		if !pathWithinDir(s.config.TemplatesDir, filePath) {
+			respondError(w, http.StatusBadRequest, ErrCodeTemplateNotFound,
+				"Invalid template name", nil)
+			return
+		}
 
 		t, err := template.ParseTemplate(filePath)
 		if err != nil {

@@ -13,7 +13,10 @@ import (
 // Config holds the web server configuration.
 // Default values match the ADR configuration section.
 type Config struct {
-	// Host is the address to bind to. Default: "0.0.0.0".
+	// Host is the address to bind to. Default: "127.0.0.1" (loopback only).
+	// The API currently has no authentication, so it binds to loopback by
+	// default to avoid unintentionally exposing it on all interfaces. Pass
+	// --host 0.0.0.0 to expose it deliberately.
 	Host string
 
 	// Port is the port to listen on. Default: 8080.
@@ -30,7 +33,7 @@ type Config struct {
 // as specified in the ADR configuration section.
 func DefaultServerConfig() Config {
 	return Config{
-		Host:         "0.0.0.0",
+		Host:         "127.0.0.1",
 		Port:         8080,
 		CORS:         DefaultCORSConfig(),
 		TemplatesDir: "image-templates",

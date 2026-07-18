@@ -2,13 +2,23 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/open-edge-platform/image-composer-tool/internal/ai/provider"
 	"github.com/open-edge-platform/image-composer-tool/internal/ai/rag"
 )
+
+// isProviderUnavailable reports whether err (or anything it wraps) indicates
+// the AI provider could not be reached. It uses typed-error matching rather
+// than fragile string inspection so that DNS, TLS, timeout, and
+// connection-refused failures are all classified consistently.
+func isProviderUnavailable(err error) bool {
+	return errors.Is(err, provider.ErrProviderUnavailable)
+}
 
 // queryRequest matches the OpenAPI QueryRequest schema.
 type queryRequest struct {
@@ -92,25 +102,36 @@ func handleQuery(s *Server) http.HandlerFunc {
 		ctx := r.Context()
 
 		// Call the existing Go library directly — no CLI, no subprocess.
-		yaml, err := s.engine.Generate(ctx, query)
+		result, err := s.engine.GenerateWithContext(ctx, query)
 		if err != nil {
 			// Determine if this is a provider connectivity issue or a
-			// generation failure.
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+			// generation failure using typed-error matching.
+			if isProviderUnavailable(err) {
 				respondError(w, http.StatusServiceUnavailable, ErrCodeProviderUnavail,
-					"AI provider not reachable: "+errMsg, nil)
+					"AI provider not reachable: "+err.Error(), nil)
 				return
 			}
 			respondError(w, http.StatusBadGateway, ErrCodeGenerationFailed,
-				"Template generation failed: "+errMsg, nil)
+				"Template generation failed: "+err.Error(), nil)
 			return
 		}
 
+		// Convert the RAG search context into the OpenAPI JSON shape so the
+		// non-streaming response carries the same source information the
+		// streaming path exposes.
+		jsonResults := make([]searchResultJSON, 0, len(result.SearchResults))
+		for _, sr := range result.SearchResults {
+			jsonResults = append(jsonResults, convertSearchResult(sr))
+		}
+		sourceTemplates := result.SourceTemplates
+		if sourceTemplates == nil {
+			sourceTemplates = []string{}
+		}
+
 		resp := queryResponse{
-			YAML:            yaml,
-			SearchResults:   []searchResultJSON{}, // Populated in future when Generate returns richer data
-			SourceTemplates: []string{},           // Populated in future when Generate returns richer data
+			YAML:            result.YAML,
+			SearchResults:   jsonResults,
+			SourceTemplates: sourceTemplates,
 		}
 
 		respondJSON(w, http.StatusOK, resp)
@@ -143,14 +164,13 @@ func handleSearch(s *Server) http.HandlerFunc {
 		// Call the existing Go library directly — no CLI, no subprocess.
 		results, err := s.engine.Search(ctx, query)
 		if err != nil {
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+			if isProviderUnavailable(err) {
 				respondError(w, http.StatusServiceUnavailable, ErrCodeProviderUnavail,
-					"AI provider not reachable: "+errMsg, nil)
+					"AI provider not reachable: "+err.Error(), nil)
 				return
 			}
 			respondError(w, http.StatusBadGateway, ErrCodeSearchFailed,
-				"Template search failed: "+errMsg, nil)
+				"Template search failed: "+err.Error(), nil)
 			return
 		}
 
@@ -316,14 +336,13 @@ func handleStream(s *Server) http.HandlerFunc {
 		// Start streaming generation (search is synchronous).
 		result, err := s.engine.GenerateStream(ctx, query)
 		if err != nil {
-			errMsg := err.Error()
 			code := ErrCodeGenerationFailed
-			if strings.Contains(errMsg, "connect") || strings.Contains(errMsg, "connection") {
+			if isProviderUnavailable(err) {
 				code = ErrCodeProviderUnavail
 			}
 			_ = writeSSEEvent(w, flusher, "error", sseError{
 				Code:    code,
-				Message: errMsg,
+				Message: err.Error(),
 				Retry:   true,
 			})
 			return
@@ -335,7 +354,9 @@ func handleStream(s *Server) http.HandlerFunc {
 			jsonResults = append(jsonResults, convertSearchResult(sr))
 		}
 		if err := writeSSEEvent(w, flusher, "search_results", sseSearchResults{
-			Results:   jsonResults,
+			Results: jsonResults,
+			// TODO(phase-query-classifier): report the real query type once
+			// the query classifier lands. Hardcoded to "semantic" until then.
 			QueryType: "semantic",
 		}); err != nil {
 			return // Client disconnected

@@ -179,6 +179,20 @@ type StreamResult struct {
 	ErrChan <-chan error
 }
 
+// GenerateResult holds the results of a non-streaming generation.
+// It carries the generated YAML alongside the RAG search context so callers
+// (e.g. the API layer) can report which templates informed the result.
+type GenerateResult struct {
+	// YAML is the cleaned, generated template.
+	YAML string
+
+	// SearchResults are the RAG search results used as context.
+	SearchResults []SearchResult
+
+	// SourceTemplates are the file names of templates used for generation.
+	SourceTemplates []string
+}
+
 // Search finds templates matching the query.
 func (e *Engine) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	if !e.initialized {
@@ -270,21 +284,39 @@ func (e *Engine) prepareGeneration(ctx context.Context, query string) ([]SearchR
 }
 
 // Generate generates a template based on the query and retrieved context.
+// It returns only the cleaned YAML; callers that also need the search context
+// should use GenerateWithContext.
 func (e *Engine) Generate(ctx context.Context, query string) (string, error) {
-	_, messages, _, err := e.prepareGeneration(ctx, query)
+	result, err := e.GenerateWithContext(ctx, query)
 	if err != nil {
 		return "", err
+	}
+	return result.YAML, nil
+}
+
+// GenerateWithContext generates a template and returns it together with the
+// RAG search context (search results and source template names). This lets the
+// API layer populate the same source information the streaming path exposes,
+// rather than returning empty placeholder fields.
+func (e *Engine) GenerateWithContext(ctx context.Context, query string) (*GenerateResult, error) {
+	results, messages, sourceTemplates, err := e.prepareGeneration(ctx, query)
+	if err != nil {
+		return nil, err
 	}
 
 	response, err := e.chatProvider.Chat(ctx, messages)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate template: %w", err)
+		return nil, fmt.Errorf("failed to generate template: %w", err)
 	}
 
 	// Clean up response - extract YAML if wrapped in code blocks
 	response = CleanYAMLResponse(response)
 
-	return response, nil
+	return &GenerateResult{
+		YAML:            response,
+		SearchResults:   results,
+		SourceTemplates: sourceTemplates,
+	}, nil
 }
 
 // GenerateStream performs RAG search and starts streaming LLM generation.

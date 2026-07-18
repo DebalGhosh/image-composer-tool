@@ -42,7 +42,7 @@ Example:
 	}
 
 	cmd.Flags().IntVar(&port, "port", 8080, "Port to listen on")
-	cmd.Flags().StringVar(&host, "host", "0.0.0.0", "Host address to bind to")
+	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "Host address to bind to (use 0.0.0.0 to expose on all interfaces; note the API is currently unauthenticated)")
 	cmd.Flags().StringVar(&templatesDir, "templates-dir", "", "Path to image-templates/ directory (default: auto-detect)")
 
 	return cmd
