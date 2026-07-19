@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { Theme } from '../store'
 
@@ -28,6 +29,38 @@ export function Header({
 
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark')
 
+  /* Sliding underline: measure the active tab's position + width and drive
+   * a single absolutely-positioned <span> in the nav. When `view` changes,
+   * `left` and `width` transition — the underline slides between tabs
+   * instead of teleporting. */
+  const navRef = useRef<HTMLElement>(null)
+  const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = btnRefs.current[view]
+      const nav = navRef.current
+      if (!el || !nav) return
+      const navBox = nav.getBoundingClientRect()
+      const btnBox = el.getBoundingClientRect()
+      // 8px inset either side so the underline doesn't span the button's full
+      // hover-bg width — matches the inset-x-2 the per-tab underline had.
+      setIndicator({ left: btnBox.left - navBox.left + 8, width: btnBox.width - 16 })
+    }
+    measure()
+    // Fonts loading late (Manrope / Intel One Mono over the network) reflows
+    // the tab widths; re-measure once fonts settle. Also watch window resize.
+    const ro = new ResizeObserver(measure)
+    if (navRef.current) ro.observe(navRef.current)
+    document.fonts?.ready?.then(measure).catch(() => {})
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [view])
+
   return (
     <header
       className="sticky top-0 z-40 flex items-center gap-6 border-b px-6 py-3"
@@ -46,16 +79,23 @@ export function Header({
         </span>
       </div>
 
-      <nav className="flex items-center gap-1" aria-label="Primary">
+      <nav
+        ref={navRef}
+        className="relative flex items-center gap-1"
+        aria-label="Primary"
+      >
         {tabs.map((t) => {
           const active = view === t.id
           return (
             <button
               key={t.id}
+              ref={(el) => {
+                btnRefs.current[t.id] = el
+              }}
               type="button"
               onClick={() => onViewChange(t.id)}
               className={
-                'relative rounded px-3 py-1.5 text-sm font-medium transition-colors ' +
+                'rounded px-3 py-1.5 text-sm font-medium transition-colors ' +
                 (active
                   ? 'text-white bg-white/10'
                   : 'text-white/70 hover:text-white hover:bg-white/10')
@@ -63,15 +103,22 @@ export function Header({
               aria-current={active ? 'page' : undefined}
             >
               {t.label}
-              {active && (
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-x-2 -bottom-[13px] h-[3px] rounded-t bg-white"
-                />
-              )}
             </button>
           )
         })}
+        {/* Single sliding underline. left / width transition on view change. */}
+        {indicator && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute -bottom-[13px] h-[3px] rounded-t bg-white"
+            style={{
+              left: indicator.left,
+              width: indicator.width,
+              transition:
+                'left 260ms cubic-bezier(0.22, 0.7, 0.32, 1), width 260ms cubic-bezier(0.22, 0.7, 0.32, 1)',
+            }}
+          />
+        )}
       </nav>
 
       <div className="ml-auto flex items-center gap-2">
