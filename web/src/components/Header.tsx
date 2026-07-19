@@ -97,8 +97,8 @@ export function Header({
               className={
                 'rounded px-3 py-1.5 text-sm font-medium transition-colors ' +
                 (active
-                  ? 'text-white bg-white/10'
-                  : 'text-white/70 hover:text-white hover:bg-white/10')
+                  ? 'text-white bg-white/10 cursor-default'
+                  : 'text-white/70 hover:text-white hover:bg-white/10 cursor-pointer')
               }
               aria-current={active ? 'page' : undefined}
             >
@@ -147,7 +147,7 @@ function BuildIndicator({
       type="button"
       onClick={onClick}
       title={cfg.label}
-      className="flex items-center gap-2 rounded px-2 py-1 text-xs font-medium text-white/80 hover:text-white hover:bg-white/10"
+      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs font-medium text-white/80 hover:text-white hover:bg-white/10"
     >
       <span className="relative flex h-2.5 w-2.5">
         {cfg.pulse && (
@@ -170,7 +170,7 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
       onClick={onToggle}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={isDark ? 'Light mode' : 'Dark mode'}
-      className="grid h-8 w-8 place-items-center rounded-md border text-white/90 hover:text-white hover:bg-white/10"
+      className="grid h-8 w-8 cursor-pointer place-items-center rounded-md border text-white/90 hover:text-white hover:bg-white/10"
       style={{ borderColor: 'rgba(255,255,255,0.3)' }}
     >
       {isDark ? (
