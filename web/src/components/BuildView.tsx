@@ -146,7 +146,15 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               {details.summary && (
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded bg-white p-3 shadow-sm">
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+                    <p
+                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
+                      style={{
+                        color: 'var(--title-text)',
+                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
+                      }}
+                    >
+                      Your Selection
+                    </p>
                     <table className="w-full">
                       <tbody>
                         {([
@@ -165,7 +173,15 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
                     </table>
                   </div>
                   <div className="rounded bg-white p-3 shadow-sm">
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
+                    <p
+                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
+                      style={{
+                        color: 'var(--title-text)',
+                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
+                      }}
+                    >
+                      Image Configuration
+                    </p>
                     <table className="w-full">
                       <tbody>
                         {([

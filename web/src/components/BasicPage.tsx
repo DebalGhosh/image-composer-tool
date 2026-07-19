@@ -228,7 +228,15 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
               <Card title="Image Configuration Review" className="mt-5">
                 <div className="mt-3 grid grid-cols-1 gap-3 text-xs xl:grid-cols-2">
                   <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--muted-color)' }}>Your Selection</p>
+                    <p
+                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
+                      style={{
+                        color: 'var(--title-text)',
+                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
+                      }}
+                    >
+                      Your Selection
+                    </p>
                     <table className="w-full">
                       <tbody>
                         {([
@@ -247,7 +255,15 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                     </table>
                   </div>
                   <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--muted-color)' }}>Image Configuration</p>
+                    <p
+                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
+                      style={{
+                        color: 'var(--title-text)',
+                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
+                      }}
+                    >
+                      Image Configuration
+                    </p>
                     <table className="w-full">
                       <tbody>
                         {([
