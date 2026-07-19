@@ -30,15 +30,19 @@ export function Header({
 
   return (
     <header
-      className="sticky top-0 z-40 flex items-center gap-6 border-b px-6 py-3 backdrop-blur"
+      className="sticky top-0 z-40 flex items-center gap-6 border-b px-6 py-3"
       style={{
-        background: 'color-mix(in srgb, var(--section-background) 92%, transparent)',
-        borderColor: 'var(--border-color)',
+        /* Header always presents a dark backdrop so the product title reads
+         * cleanly in white across both themes. Dark mode leans further into
+         * SSF-UI's --navbar-bg-color; light mode uses --classic-blue for the
+         * Intel-brand strip look. */
+        background: 'var(--classic-blue)',
+        borderColor: 'color-mix(in srgb, black 30%, var(--classic-blue))',
       }}
     >
       <div className="flex items-center gap-3">
         <img src="/intel-logo.svg" alt="" className="h-7 w-auto" aria-hidden="true" />
-        <span className="gradient-text text-lg font-bold tracking-tight">
+        <span className="text-lg font-bold tracking-tight text-white">
           Image Composer Tool
         </span>
       </div>
@@ -54,8 +58,8 @@ export function Header({
               className={
                 'relative rounded px-3 py-1.5 text-sm font-medium transition-colors ' +
                 (active
-                  ? 'text-[var(--classic-blue)] dark:text-[var(--tine-1)]'
-                  : 'text-[var(--muted-color)] hover:text-[var(--font-color)] hover:bg-black/5 dark:hover:bg-white/10')
+                  ? 'text-white bg-white/10'
+                  : 'text-white/70 hover:text-white hover:bg-white/10')
               }
               aria-current={active ? 'page' : undefined}
             >
@@ -63,8 +67,7 @@ export function Header({
               {active && (
                 <span
                   aria-hidden="true"
-                  className="absolute inset-x-2 -bottom-[13px] h-[3px] rounded-t"
-                  style={{ background: 'var(--metrics-gradient)' }}
+                  className="absolute inset-x-2 -bottom-[13px] h-[3px] rounded-t bg-white"
                 />
               )}
             </button>
@@ -98,7 +101,7 @@ function BuildIndicator({
       type="button"
       onClick={onClick}
       title={cfg.label}
-      className="flex items-center gap-2 rounded px-2 py-1 text-xs font-medium text-[var(--font-color)] hover:bg-black/5 dark:hover:bg-white/10"
+      className="flex items-center gap-2 rounded px-2 py-1 text-xs font-medium text-white/80 hover:text-white hover:bg-white/10"
     >
       <span className="relative flex h-2.5 w-2.5">
         {cfg.pulse && (
@@ -121,8 +124,8 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
       onClick={onToggle}
       aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
       title={isDark ? 'Light mode' : 'Dark mode'}
-      className="grid h-8 w-8 place-items-center rounded-md border text-[var(--font-color)] hover:bg-black/5 dark:hover:bg-white/10"
-      style={{ borderColor: 'var(--border-color)' }}
+      className="grid h-8 w-8 place-items-center rounded-md border text-white/90 hover:text-white hover:bg-white/10"
+      style={{ borderColor: 'rgba(255,255,255,0.3)' }}
     >
       {isDark ? (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

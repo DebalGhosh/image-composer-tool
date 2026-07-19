@@ -331,7 +331,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           of the viewport regardless of pane scroll position. Blurs the
           content behind it so the seam feels intentional in either theme. */}
       <footer className="action-footer">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-6 py-3">
+        <div className="flex items-center gap-3 px-6 py-3">
           <button
             className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--metrics-gradient)' }}

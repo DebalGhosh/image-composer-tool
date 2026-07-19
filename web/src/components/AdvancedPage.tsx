@@ -348,7 +348,7 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
 
       {/* Sticky footer — same treatment as BasicPage for visual parity. */}
       <footer className="action-footer">
-        <div className="mx-auto flex flex-wrap items-center gap-3 max-w-6xl px-6 py-3">
+        <div className="flex flex-wrap items-center gap-3 px-6 py-3">
           <button
             className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--metrics-gradient)' }}

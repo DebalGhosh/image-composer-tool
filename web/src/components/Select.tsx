@@ -1,10 +1,6 @@
-import type {
-  CSSProperties,
-  InputHTMLAttributes,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
-} from 'react'
+import { Children, isValidElement, type CSSProperties, type ReactElement, type ReactNode, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import type { DropdownOption } from '../store'
+import { Combobox, type ComboboxItem } from './Combobox'
 
 /* ------------------------------------------------------------------------- *
  * Shared form-control class recipes.
@@ -34,38 +30,11 @@ export const controlBaseStyle: CSSProperties = {
 /** Recipe extensions per widget type. */
 export const inputControl = controlBase
 export const textareaControl = controlBase + ' font-mono resize-y'
-export const selectControl = controlBase + ' appearance-none pr-10 cursor-pointer'
-
-/* Caret glyph. We recolour it by masking a solid coloured span (not by
- * baking colour into the SVG) so light/dark can swap the tint without
- * shipping two payloads. */
-const CARET_MASK =
-  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'>" +
-  "<path d='M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z'/>" +
-  "</svg>\")"
-
-function Caret() {
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2"
-      style={{
-        background: 'var(--classic-blue)',
-        WebkitMaskImage: CARET_MASK,
-        maskImage: CARET_MASK,
-        WebkitMaskRepeat: 'no-repeat',
-        maskRepeat: 'no-repeat',
-        WebkitMaskSize: 'contain',
-        maskSize: 'contain',
-        WebkitMaskPosition: 'center',
-        maskPosition: 'center',
-      }}
-    />
-  )
-}
 
 /* ------------------------------------------------------------------------- *
  * <Select> — cascading dropdown used by BasicPage.
+ * Now delegates to the in-house <Combobox> for a proper JS listbox with
+ * rotating caret, animated menu, hover transitions, and keyboard navigation.
  * Signature unchanged so existing call sites need no update.
  * ------------------------------------------------------------------------- */
 
@@ -87,62 +56,75 @@ export function Select({
   onChange,
 }: SelectProps) {
   const id = `select-${label.toLowerCase().replace(/\s+/g, '-')}`
+  const items: ComboboxItem[] = options.map((o) => ({ value: o.id, label: o.label }))
   return (
     <div className="mb-4">
-      <label htmlFor={id} className={fieldLabelClass} style={fieldLabelStyle}>
+      <label id={id + '-label'} htmlFor={id} className={fieldLabelClass} style={fieldLabelStyle}>
         {label}
       </label>
-      <div className="relative">
-        <select
-          id={id}
-          className={selectControl}
-          style={controlBaseStyle}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="" disabled>
-            {placeholder}
-          </option>
-          {options.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <Caret />
-      </div>
+      <Combobox
+        id={id}
+        ariaLabelledBy={id + '-label'}
+        value={value}
+        items={items}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={onChange}
+      />
     </div>
   )
 }
 
 /* ------------------------------------------------------------------------- *
- * <NativeSelect> — same styling for pages that render custom <option>
- * children (e.g. AdvancedPage's seed picker). Accepts every native prop.
+ * <NativeSelect> — misnamed for backwards-compat (used to wrap a real native
+ * <select>). Now also delegates to <Combobox>, but keeps its
+ * `<option>`-children API so consumers (AdvancedPage's seed picker) don't
+ * need to change: children are walked at render time and reshaped to items.
  * ------------------------------------------------------------------------- */
 
-interface NativeSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+interface NativeSelectProps {
+  id?: string
+  value: string
+  disabled?: boolean
+  onChange: (e: { target: { value: string } }) => void
+  children: ReactNode
   containerClassName?: string
 }
 
 export function NativeSelect({
-  containerClassName = '',
-  className = '',
+  id,
+  value,
+  disabled,
+  onChange,
   children,
-  style,
-  ...rest
+  containerClassName = '',
 }: NativeSelectProps) {
+  const items: ComboboxItem[] = []
+  let placeholder = ''
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return
+    if ((child as ReactElement).type !== 'option') return
+    const c = child as ReactElement<{ value?: string; children?: ReactNode; disabled?: boolean }>
+    const v = c.props.value ?? ''
+    const label = c.props.children
+    // First <option value=""> is the placeholder text — extract it and skip
+    // adding a placeholder item to the list (Combobox shows its own).
+    if (v === '') {
+      if (typeof label === 'string') placeholder = label
+      return
+    }
+    items.push({ value: v, label: label as ReactNode, disabled: c.props.disabled })
+  })
   return (
-    <div className={'relative ' + containerClassName}>
-      <select
-        className={selectControl + (className ? ' ' + className : '')}
-        style={{ ...controlBaseStyle, ...style }}
-        {...rest}
-      >
-        {children}
-      </select>
-      <Caret />
-    </div>
+    <Combobox
+      id={id}
+      value={value}
+      items={items}
+      placeholder={placeholder || '-- Select --'}
+      disabled={disabled}
+      onChange={(v) => onChange({ target: { value: v } })}
+      className={containerClassName}
+    />
   )
 }
 
