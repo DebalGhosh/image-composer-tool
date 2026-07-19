@@ -137,7 +137,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
    * independently. */
   return (
     <div className="basic-page-shell">
-      <PanelGroup direction="horizontal" className="h-full">
+      <PanelGroup direction="horizontal" className="min-h-0 flex-1">
         <Panel
           /* No fixed defaultSize on the left — the browser will fill it as
              (100 - rightPanelDefaultSize) so the two always sum to 100 %. */
@@ -271,26 +271,6 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
               </Card>
             )}
 
-            <div className="mt-6">
-              <button
-                className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                style={{ background: 'var(--metrics-gradient)' }}
-                disabled={!complete || busy || buildInProgress}
-                onClick={onBuild}
-              >
-                {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
-              </button>
-              {!complete && !buildInProgress && (
-                <span className="ml-3 text-sm text-[var(--muted-color)]">
-                  Complete all selections to build.
-                </span>
-              )}
-              {buildInProgress && (
-                <span className="ml-3 text-sm" style={{ color: 'var(--warning)' }}>
-                  A build is already in progress. Switch to the Build Image tab to monitor it.
-                </span>
-              )}
-            </div>
           </div>
         </Panel>
 
@@ -347,12 +327,47 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
         </Panel>
       </PanelGroup>
 
+      {/* Sticky footer: the Build Image action stays anchored at the bottom
+          of the viewport regardless of pane scroll position. Blurs the
+          content behind it so the seam feels intentional in either theme. */}
+      <footer className="action-footer">
+        <div className="mx-auto flex max-w-6xl items-center gap-3 px-6 py-3">
+          <button
+            className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: 'var(--metrics-gradient)' }}
+            disabled={!complete || busy || buildInProgress}
+            onClick={onBuild}
+          >
+            {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+          </button>
+          {!complete && !buildInProgress && (
+            <span className="text-sm text-[var(--muted-color)]">
+              Complete all selections to build.
+            </span>
+          )}
+          {buildInProgress && (
+            <span className="text-sm" style={{ color: 'var(--warning)' }}>
+              A build is already in progress. Switch to the Build Image tab to monitor it.
+            </span>
+          )}
+        </div>
+      </footer>
+
       {/* Local styling: page shell fills the viewport minus header, and the
           drag handle gets a proper visual + hover state. */}
       <style>{`
         .basic-page-shell {
           height: calc(100vh - 3.75rem); /* nav ~60px; adjust if header height changes */
           min-height: 0;
+          display: flex;
+          flex-direction: column;
+        }
+        .action-footer {
+          flex: none;
+          border-top: 1px solid var(--border-color);
+          background: color-mix(in srgb, var(--section-background) 92%, transparent);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
         }
         .resize-handle {
           position: relative;

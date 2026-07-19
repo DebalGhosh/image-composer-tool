@@ -173,7 +173,9 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
   }
 
   return (
-    <div className="mx-auto max-w-6xl p-6">
+    <div className="advanced-page-shell">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-6xl p-6">
       <h1 className="mb-1 text-2xl font-bold" style={{ color: 'var(--title-text)' }}>
         Advanced: Raw Template YAML
       </h1>
@@ -341,41 +343,63 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
         </Card>
       )}
 
-      <div className="mt-6">
-        <button
-          className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          style={{ background: 'var(--metrics-gradient)' }}
-          disabled={!canBuild}
-          onClick={onBuild}
-        >
-          {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
-        </button>
-        {empty && !buildInProgress && (
-          <span className="ml-3 text-sm text-[var(--muted-color)]">
-            Paste template YAML to build.
-          </span>
-        )}
-        {!empty && invalid && !buildInProgress && (
-          <span className="ml-3 text-sm" style={{ color: 'var(--danger)' }}>
-            Fix the YAML syntax error to build.
-          </span>
-        )}
-        {!empty && !invalid && tooLarge && (
-          <span className="ml-3 text-sm" style={{ color: 'var(--danger)' }}>
-            YAML exceeds 200 KB — trim before building.
-          </span>
-        )}
-        {!empty && !invalid && !tooLarge && blockedByPlaceholders && (
-          <span className="ml-3 text-sm" style={{ color: 'var(--warning)' }}>
-            Resolve placeholders or acknowledge the override to build.
-          </span>
-        )}
-        {buildInProgress && (
-          <span className="ml-3 text-sm" style={{ color: 'var(--warning)' }}>
-            A build is already in progress. Switch to the Build Image tab to monitor it.
-          </span>
-        )}
+        </div>
       </div>
+
+      {/* Sticky footer — same treatment as BasicPage for visual parity. */}
+      <footer className="action-footer">
+        <div className="mx-auto flex flex-wrap items-center gap-3 max-w-6xl px-6 py-3">
+          <button
+            className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ background: 'var(--metrics-gradient)' }}
+            disabled={!canBuild}
+            onClick={onBuild}
+          >
+            {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+          </button>
+          {empty && !buildInProgress && (
+            <span className="text-sm text-[var(--muted-color)]">
+              Paste template YAML to build.
+            </span>
+          )}
+          {!empty && invalid && !buildInProgress && (
+            <span className="text-sm" style={{ color: 'var(--danger)' }}>
+              Fix the YAML syntax error to build.
+            </span>
+          )}
+          {!empty && !invalid && tooLarge && (
+            <span className="text-sm" style={{ color: 'var(--danger)' }}>
+              YAML exceeds 200 KB — trim before building.
+            </span>
+          )}
+          {!empty && !invalid && !tooLarge && blockedByPlaceholders && (
+            <span className="text-sm" style={{ color: 'var(--warning)' }}>
+              Resolve placeholders or acknowledge the override to build.
+            </span>
+          )}
+          {buildInProgress && (
+            <span className="text-sm" style={{ color: 'var(--warning)' }}>
+              A build is already in progress. Switch to the Build Image tab to monitor it.
+            </span>
+          )}
+        </div>
+      </footer>
+
+      <style>{`
+        .advanced-page-shell {
+          height: calc(100vh - 3.75rem);
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+        }
+        .action-footer {
+          flex: none;
+          border-top: 1px solid var(--border-color);
+          background: color-mix(in srgb, var(--section-background) 92%, transparent);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+        }
+      `}</style>
     </div>
   )
 }
