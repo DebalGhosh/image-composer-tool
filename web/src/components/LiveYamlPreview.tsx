@@ -172,14 +172,20 @@ export function LiveYamlPreview({ selection, complete }: LiveYamlPreviewProps) {
         )}
       </div>
 
-      {/* Local keyframe: subtle fade + upward slide as fresh YAML lands. */}
+      {/* Local keyframe: opacity-only fade as fresh YAML lands.
+       *
+       * Note: intentionally NOT animating `transform: translateY` here — while
+       * the animation runs, `transform` establishes a containing block for
+       * fixed-position descendants (CSS spec). That would trap the child
+       * YamlEditor's fullscreen overlay inside this wrapper. Keeping the swap
+       * opacity-only is enough visual signal that a new template has resolved. */}
       <style>{`
         .preview-transition > * {
-          animation: yaml-swap 320ms cubic-bezier(0.22, 0.7, 0.32, 1);
+          animation: yaml-swap 260ms ease-out;
         }
         @keyframes yaml-swap {
-          from { opacity: 0; transform: translateY(4px); }
-          to   { opacity: 1; transform: translateY(0); }
+          from { opacity: 0; }
+          to   { opacity: 1; }
         }
       `}</style>
       {/* Suppress `theme` unused warning while keeping the dep so future

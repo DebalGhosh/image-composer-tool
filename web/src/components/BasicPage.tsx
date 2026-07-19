@@ -302,11 +302,16 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
               className="min-h-0 flex-1"
               style={{
                 opacity: complete ? 1 : 0,
-                transform: complete ? 'translateX(0)' : 'translateX(8px)',
                 pointerEvents: complete ? 'auto' : 'none',
-                transition:
-                  'opacity 320ms ease 120ms, transform 380ms cubic-bezier(0.22, 0.7, 0.32, 1) 120ms',
+                transition: 'opacity 320ms ease 120ms',
               }}
+              /* Note: intentionally NOT using `transform: translateX(...)` here.
+                 A permanent `transform` value on the style attribute establishes
+                 a containing block for fixed-position descendants (CSS spec),
+                 which would trap the YamlEditor's fullscreen overlay inside
+                 this pane instead of covering the viewport. The 8px horizontal
+                 slide was cosmetic; the pane's own width animation (0 → 45 %)
+                 already carries most of the "drop-in" feel. */
             >
               <LiveYamlPreview selection={selection} complete={complete} />
             </div>
