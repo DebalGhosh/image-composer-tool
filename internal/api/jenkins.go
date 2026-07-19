@@ -512,8 +512,10 @@ func (s *Server) runJenkinsBuild(b *build) {
 	// A partial line that hasn't seen its trailing '\n' yet -- carried across
 	// chunks so we never emit half a line.
 	var partial strings.Builder
-	// Poll on a tight cadence while running. Between polls, honour the context.
-	poll := time.NewTicker(1 * time.Second)
+	// 500 ms upstream poll cadence (down from 1 s). Combined with the
+	// push-based SSE handler that reflects appendLog instantly, browser
+	// latency is now ~poll interval, not poll interval + SSE tick.
+	poll := time.NewTicker(500 * time.Millisecond)
 	defer poll.Stop()
 	// A single transient error (network blip, 502 from the reverse proxy)
 	// shouldn't tear down a build that's still running on Jenkins. Allow a

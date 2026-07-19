@@ -76,6 +76,12 @@ type build struct {
 	logLines  []string // buffered log history for late log subscribers
 	artifacts []artifact
 	errMsg    string
+	// wake is a broadcast channel: it is CLOSED (never sent-on) by
+	// appendLog to wake every SSE subscriber that's blocked on it, then
+	// atomically replaced with a fresh channel under mu. Subscribers grab
+	// the current channel under mu and select on it; when it closes they
+	// re-grab and drain freshly-appended lines. Push-based — no polling.
+	wake chan struct{}
 }
 
 // result is an immutable snapshot of a build's terminal state.
@@ -118,10 +124,20 @@ func (t *buildTracker) get(id string) (*build, bool) {
 }
 
 // appendLog records a log line and is safe for concurrent use.
+//
+// Also wakes every SSE subscriber currently blocked on b.wake by closing
+// the current wake channel and installing a fresh one for the next round.
+// Close-once semantics mean N subscribers all unblock from a single
+// broadcast with zero per-subscriber allocation.
 func (b *build) appendLog(line string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.logLines = append(b.logLines, line)
+	prev := b.wake
+	b.wake = make(chan struct{})
+	b.mu.Unlock()
+	if prev != nil {
+		close(prev)
+	}
 }
 
 func (b *build) snapshotLogs() []string {
@@ -130,6 +146,18 @@ func (b *build) snapshotLogs() []string {
 	out := make([]string, len(b.logLines))
 	copy(out, b.logLines)
 	return out
+}
+
+// waitChan returns the current wake channel — a subscriber selects on this
+// under mu, so it observes the pre-append value; when appendLog runs it
+// closes exactly this channel, unblocking every waiter atomically.
+func (b *build) waitChan() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.wake == nil {
+		b.wake = make(chan struct{})
+	}
+	return b.wake
 }
 
 // --- request/response bodies ---
