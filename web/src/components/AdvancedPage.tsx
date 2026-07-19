@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import YAML from 'yaml'
 import { useStore, useToast } from '../store'
 import { api } from '../api/client'
 import type { ComposeRequest } from '../api/types'
@@ -21,13 +22,46 @@ const PLACEHOLDER_TOKENS = ['<URL>', '<PUBLIC_KEY_URL>', '/path/to/'] as const
 // runaway paste (a whole log, a binary blob) shouldn't quietly hit the server.
 const MAX_YAML_BYTES = 200 * 1024
 
+// Parsed-YAML validity result. Structural failures block the build; empty and
+// too-large are surfaced separately by their own gates.
+interface YamlValidity {
+  ok: boolean
+  message: string | null
+  line: number | null
+  col: number | null
+}
+
+function validateYaml(text: string): YamlValidity {
+  if (text.trim().length === 0) {
+    // Empty is handled by the `empty` gate; not "invalid" per se.
+    return { ok: true, message: null, line: null, col: null }
+  }
+  try {
+    // parse (not parseDocument) throws on the first structural error, which is
+    // exactly what we want to surface. It also enforces a valid YAML document.
+    YAML.parse(text)
+    return { ok: true, message: null, line: null, col: null }
+  } catch (e) {
+    const err = e as { name?: string; message?: string; linePos?: Array<{ line: number; col: number }> }
+    const pos = err.linePos && err.linePos[0]
+    return {
+      ok: false,
+      // Trim trailing "at line X, column Y" from the message — we render that ourselves.
+      message: (err.message ?? 'YAML syntax error').replace(/\s*at line \d+, column \d+.*$/s, ''),
+      line: pos?.line ?? null,
+      col: pos?.col ?? null,
+    }
+  }
+}
+
 export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPageProps) {
   const manifest = useStore((s) => s.manifest)
   const yaml = useStore((s) => s.advancedYaml)
   const setYaml = useStore((s) => s.setAdvancedYaml)
+  const seedPick = useStore((s) => s.advancedSeedPick)
+  const setSeedPick = useStore((s) => s.setAdvancedSeedPick)
   const toast = useToast()
 
-  const [seedPick, setSeedPick] = useState('')
   const [seedBusy, setSeedBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [override, setOverride] = useState(false)
@@ -37,14 +71,25 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
     () => PLACEHOLDER_TOKENS.filter((t) => yaml.includes(t)),
     [yaml],
   )
+  // Real-time YAML validation. Re-parses on every keystroke; `yaml` parses
+  // ~1 MB in single-digit ms so this is cheap for typical templates. Memoised
+  // on the buffer so re-renders that don't touch the text don't re-parse.
+  const validity = useMemo(() => validateYaml(yaml), [yaml])
 
   if (!manifest) return <div className="p-8">Loading…</div>
 
   const empty = yaml.trim().length === 0
   const tooLarge = byteLen > MAX_YAML_BYTES
+  const invalid = !empty && !validity.ok
   const blockedByPlaceholders = placeholders.length > 0 && !override
   const canBuild =
-    !empty && !tooLarge && !blockedByPlaceholders && !busy && !buildInProgress && !seedBusy
+    !empty &&
+    !tooLarge &&
+    !invalid &&
+    !blockedByPlaceholders &&
+    !busy &&
+    !buildInProgress &&
+    !seedBusy
 
   const seedLabel = (i: number): string => {
     const c = manifest.combinations[i]
@@ -58,16 +103,19 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
     return [v, sku, p, os, rt, c.imageType.toUpperCase()].filter(Boolean).join(' · ')
   }
 
-  const onSeed = async (raw: string) => {
-    // Always reset the select back to the placeholder so picking the same
-    // seed twice still re-fires (and so nothing looks "stuck" selected).
-    setSeedPick('')
-    if (!raw) return
-    const idx = Number(raw)
+  /**
+   * Load (or reload) the seed template at index `idx`.
+   *
+   * Split from onChange so the same-seed-twice case can call it explicitly via
+   * the Reload button without going through the dropdown's onChange (which
+   * would be a no-op because the value hasn't changed).
+   */
+  const loadSeed = async (idx: number, confirmReplace: boolean) => {
     const combo = manifest.combinations[idx]
     if (!combo) return
 
     if (
+      confirmReplace &&
       yaml.trim().length > 0 &&
       !window.confirm('Replace the current YAML with the seed template?')
     ) {
@@ -92,6 +140,21 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
     } finally {
       setSeedBusy(false)
     }
+  }
+
+  const onSeedChange = async (raw: string) => {
+    if (!raw) {
+      // User cleared the dropdown ("-- Pick a template to prefill --" chosen).
+      setSeedPick('')
+      return
+    }
+    setSeedPick(raw)
+    await loadSeed(Number(raw), /* confirmReplace= */ true)
+  }
+
+  const onReloadSeed = async () => {
+    if (!seedPick) return
+    await loadSeed(Number(seedPick), /* confirmReplace= */ true)
   }
 
   const onBuild = async () => {
@@ -123,7 +186,7 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
         <ul className="list-disc space-y-0.5 pl-5 text-xs">
           <li>Skips the curated vertical/SKU/platform combinations from the manifest.</li>
           <li>The build runs as root on the server host — take care with mounts and post-install hooks.</li>
-          <li>No client-side YAML validation is performed; syntax errors surface via the build log.</li>
+          <li>Syntax is validated client-side as you type; deeper semantic errors surface in the build log.</li>
         </ul>
       </Card>
 
@@ -136,21 +199,44 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
           >
             Seed from template (optional)
           </label>
-          <NativeSelect
-            id="advanced-seed"
-            value={seedPick}
-            disabled={seedBusy || busy}
-            onChange={(e) => onSeed(e.target.value)}
-          >
-            <option value="">
-              {seedBusy ? 'Loading seed…' : '-- Pick a template to prefill --'}
-            </option>
-            {manifest.combinations.map((c, i) => (
-              <option key={`${c.template}-${i}`} value={i}>
-                {seedLabel(i)}
+          <div className="flex items-stretch gap-2">
+            <NativeSelect
+              id="advanced-seed"
+              value={seedPick}
+              disabled={seedBusy || busy}
+              onChange={(e) => onSeedChange(e.target.value)}
+              containerClassName="min-w-0 flex-1"
+            >
+              <option value="">
+                {seedBusy ? 'Loading seed…' : '-- Pick a template to prefill --'}
               </option>
-            ))}
-          </NativeSelect>
+              {manifest.combinations.map((c, i) => (
+                <option key={`${c.template}-${i}`} value={i}>
+                  {seedLabel(i)}
+                </option>
+              ))}
+            </NativeSelect>
+            <button
+              type="button"
+              onClick={onReloadSeed}
+              disabled={!seedPick || seedBusy || busy}
+              className="rounded-md border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
+              style={{ borderColor: 'var(--border-color)', color: 'var(--font-color)' }}
+              title={seedPick ? 'Discard local edits and reload the selected seed' : 'Pick a seed first'}
+              aria-label="Reload seed template"
+            >
+              ↻ Reload
+            </button>
+          </div>
+          {seedPick && !seedBusy && (
+            <p className="mt-1 text-xs" style={{ color: 'var(--muted-color)' }}>
+              Loaded from{' '}
+              <span className="font-mono" style={{ color: 'var(--font-color)' }}>
+                {seedLabel(Number(seedPick))}
+              </span>
+              . Edit freely — the seed selector will remain so you can revert with Reload.
+            </p>
+          )}
         </div>
 
         <span
@@ -171,18 +257,65 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
           className={
             'overflow-hidden rounded-md border transition-colors ' +
             'focus-within:ring-2 focus-within:ring-[var(--tine-1)]/40 ' +
-            'focus-within:border-[var(--classic-blue)] dark:focus-within:border-[var(--tine-1)] ' +
+            (invalid
+              ? 'border-[color:var(--danger)] '
+              : 'focus-within:border-[var(--classic-blue)] dark:focus-within:border-[var(--tine-1)] ') +
             (seedBusy ? 'opacity-60' : '')
           }
         />
-        <div className="mt-1 text-xs" style={{ color: 'var(--muted-color)' }}>
-          {yaml.length} chars · {(byteLen / 1024).toFixed(1)} KB
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ color: 'var(--muted-color)' }}>
+          <span>
+            {yaml.length} chars · {(byteLen / 1024).toFixed(1)} KB
+          </span>
+          {/* Compact live-validity pill. Reads YAMLParseError line/col from `yaml`. */}
+          {!empty && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium"
+              style={{
+                background: validity.ok
+                  ? 'color-mix(in srgb, var(--success) 12%, transparent)'
+                  : 'color-mix(in srgb, var(--danger) 14%, transparent)',
+                color: validity.ok ? 'var(--success)' : 'var(--danger-fg)',
+              }}
+              aria-live="polite"
+            >
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: validity.ok ? 'var(--success)' : 'var(--danger-fg)' }}
+              />
+              {validity.ok
+                ? 'YAML valid'
+                : validity.line
+                  ? `YAML invalid · line ${validity.line}${validity.col ? `, col ${validity.col}` : ''}`
+                  : 'YAML invalid'}
+            </span>
+          )}
           {tooLarge && (
-            <span className="ml-2" style={{ color: 'var(--danger-fg)' }}>
+            <span style={{ color: 'var(--danger-fg)' }}>
               Exceeds 200 KB hard limit — trim before building.
             </span>
           )}
         </div>
+
+        {invalid && validity.message && (
+          <div
+            className="mt-3 rounded-md border-l-4 p-3 text-xs"
+            style={{
+              background: 'color-mix(in srgb, var(--danger) 8%, var(--section-background))',
+              borderLeftColor: 'var(--danger)',
+              color: 'var(--font-color)',
+            }}
+          >
+            <p className="mb-1 font-semibold" style={{ color: 'var(--danger-fg)' }}>
+              YAML syntax error
+              {validity.line ? ` at line ${validity.line}${validity.col ? `, col ${validity.col}` : ''}` : ''}
+            </p>
+            <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed opacity-90">
+              {validity.message}
+            </pre>
+          </div>
+        )}
       </Card>
 
       {placeholders.length > 0 && (
@@ -222,12 +355,17 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
             Paste template YAML to build.
           </span>
         )}
-        {!empty && tooLarge && (
+        {!empty && invalid && !buildInProgress && (
+          <span className="ml-3 text-sm" style={{ color: 'var(--danger)' }}>
+            Fix the YAML syntax error to build.
+          </span>
+        )}
+        {!empty && !invalid && tooLarge && (
           <span className="ml-3 text-sm" style={{ color: 'var(--danger)' }}>
             YAML exceeds 200 KB — trim before building.
           </span>
         )}
-        {!empty && !tooLarge && blockedByPlaceholders && (
+        {!empty && !invalid && !tooLarge && blockedByPlaceholders && (
           <span className="ml-3 text-sm" style={{ color: 'var(--warning)' }}>
             Resolve placeholders or acknowledge the override to build.
           </span>

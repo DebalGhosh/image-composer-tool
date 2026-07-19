@@ -80,11 +80,21 @@ interface AppState {
   // (Advanced -> Build Image -> Advanced) doesn't lose the operator's
   // unsaved YAML edits.
   advancedYaml: string
+  /**
+   * Advanced-tab seed-dropdown selection (empty string = no seed picked).
+   * Persisted in the store so:
+   *   (a) the dropdown shows which template the current YAML came from,
+   *   (b) switching tabs and coming back preserves the picked-seed indicator.
+   * The Reload button next to the dropdown re-fires the same seed if the
+   * operator wants to discard their edits and start over.
+   */
+  advancedSeedPick: string
   theme: Theme
   toasts: Toast[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   setAdvancedYaml: (yaml: string) => void
+  setAdvancedSeedPick: (v: string) => void
   setTheme: (theme: Theme) => void
   pushToast: (t: ToastInput) => string
   dismissToast: (id: string) => void
@@ -108,10 +118,12 @@ export const useStore = create<AppState>((set) => ({
   manifest: null,
   selection: emptySelection,
   advancedYaml: '',
+  advancedSeedPick: '',
   theme: initialTheme,
   toasts: [],
   setManifest: (m) => set({ manifest: m }),
   setAdvancedYaml: (yaml) => set({ advancedYaml: yaml }),
+  setAdvancedSeedPick: (v) => set({ advancedSeedPick: v }),
   setTheme: (theme) => {
     try {
       window.localStorage.setItem(THEME_KEY, theme)
