@@ -211,7 +211,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
               />
 
               <label
-                className="mt-1 flex cursor-pointer items-center gap-2 text-sm"
+                className="mt-2 flex cursor-pointer items-center gap-3 text-sm"
                 style={{ color: 'var(--font-color)' }}
               >
                 <input
@@ -219,7 +219,12 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                   checked={reviewOpen}
                   disabled={!complete}
                   onChange={onToggleReview}
-                  className="accent-[var(--classic-blue)]"
+                  /* h-4 w-4 (~16px) bumps the native tick above the ~13px
+                     default so the check itself gets more visual padding
+                     inside the box. accent-color paints the tick in Intel
+                     blue in browsers that support it (Chrome 93+, Firefox 92+,
+                     Safari 15.4+). */
+                  className="h-4 w-4 accent-[var(--classic-blue)] cursor-pointer disabled:cursor-not-allowed"
                 />
                 Review Image Configuration
               </label>

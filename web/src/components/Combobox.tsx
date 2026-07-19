@@ -286,12 +286,14 @@ export function Combobox({
               }}
             >
               {/* Left check for the currently-selected value. Reserves 12px
-                  even when hidden so text doesn't jiggle when selection moves. */}
+                  even when hidden so text doesn't jiggle when selection moves.
+                  Uses --font-color so the tick reads as dark on light and
+                  near-white on the dark section background. */}
               <span
                 aria-hidden
                 className="inline-block w-3 shrink-0 text-center"
                 style={{
-                  color: 'var(--classic-blue)',
+                  color: 'var(--font-color)',
                   opacity: isSelected ? 1 : 0,
                   transition: 'opacity 140ms ease',
                 }}

@@ -331,12 +331,12 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
             These are unfilled markers from the reference templates and will make the
             build fail. Replace them, or acknowledge the override below to build anyway.
           </p>
-          <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs">
+          <label className="mt-3 flex cursor-pointer items-center gap-3 text-xs">
             <input
               type="checkbox"
               checked={override}
               onChange={(e) => setOverride(e.target.checked)}
-              className="accent-[var(--classic-blue)]"
+              className="h-4 w-4 accent-[var(--classic-blue)] cursor-pointer"
             />
             I know these placeholders are present; build anyway.
           </label>
