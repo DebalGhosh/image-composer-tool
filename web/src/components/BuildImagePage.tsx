@@ -10,9 +10,15 @@ interface BuildImagePageProps {
 }
 
 export function BuildImagePage({ buildId, onRetry, retrying, onStatusChange }: BuildImagePageProps) {
+  // Full-viewport flex column so the BuildView's Build Log card can grow
+  // into all remaining vertical space via flex-1 min-h-0. The 3.75rem
+  // subtracted from 100vh matches the sticky Header height.
   return (
-    <div className="mx-auto max-w-6xl p-6">
-      <h1 className="mb-4 text-2xl font-bold" style={{ color: 'var(--title-text)' }}>
+    <div
+      className="mx-auto flex w-full max-w-6xl flex-col p-6"
+      style={{ height: 'calc(100vh - 3.75rem)' }}
+    >
+      <h1 className="mb-4 flex-none text-2xl font-bold" style={{ color: 'var(--title-text)' }}>
         Build Image
       </h1>
       {buildId ? (

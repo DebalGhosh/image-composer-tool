@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../store'
 import type { Artifact, BuildDetails } from '../api/types'
 import { Card } from './Card'
 import { SummaryPanel } from './SummaryPanel'
+import { TerminalLog } from './TerminalLog'
 
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
@@ -24,7 +25,6 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const logRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
 
   useEffect(() => {
@@ -90,11 +90,6 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
     return () => es.close()
   }, [buildId])
 
-  // Auto-scroll to the newest log line.
-  useEffect(() => {
-    logRef.current?.scrollTo(0, logRef.current.scrollHeight)
-  }, [logs])
-
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
   const downloadLogs = () => {
     const blob = new Blob([logs.join('\n')], { type: 'text/plain' })
@@ -109,7 +104,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
   return (
-    <div className="mt-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <Card
         title={
           <span className="flex items-center gap-3">
@@ -156,7 +151,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
             )}
           </div>
         }
-        className="mb-4"
+        className="flex-none"
       >
 
       {/* Failure message is surfaced via toast.danger from the SSE 'error' handler,
@@ -331,26 +326,30 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
             </button>
           </>
         }
+        className="flex min-h-0 flex-1 flex-col"
       >
+        {/* min-h-0 is critical on flex children -- default min-height:auto
+            would prevent the terminal from shrinking below its content
+            size, breaking the flex-1 grow behavior. */}
         <div
-          ref={logRef}
-          className="h-[32rem] overflow-auto rounded-md bg-[#00285a] p-3 font-mono text-xs leading-relaxed text-slate-100"
+          className="min-h-0 flex-1 overflow-hidden rounded-md"
+          style={{
+            background: 'var(--terminal-background, #0b1220)',
+            padding: '8px',
+          }}
         >
-          {logs.length === 0 && <div className="text-slate-400">Waiting for build output…</div>}
-          {logs.map((line, i) => {
-            const clean = cleanLine(line)
-            if (clean === '') return null
-            return (
-              <div key={i} className="whitespace-pre">
-                {clean}
-              </div>
-            )
-          })}
+          {logs.length === 0 ? (
+            <div className="p-3 font-mono text-xs" style={{ color: 'var(--muted-color)' }}>
+              Waiting for build output…
+            </div>
+          ) : (
+            <TerminalLog logs={logs} className="h-full" />
+          )}
         </div>
       </Card>
 
       {artifacts.length > 0 && (
-        <Card title="Artifacts" className="mt-4">
+        <Card title="Artifacts" className="flex-none">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left" style={{ background: 'color-mix(in srgb, var(--classic-blue) 12%, var(--section-background))' }}>
@@ -441,20 +440,3 @@ function StatusBadge({ status }: { status: Status }) {
   return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls[status]}`}>{label[status]}</span>
 }
 
-// Clean a raw log line for display:
-// 1. Strip all ANSI/VT100 escape sequences (color, cursor movement, line-clear, etc.)
-// 2. Drop any trailing carriage returns (Windows-style CRLF that survived
-//    splitting on '\n' -- Jenkins' progressiveText preserves them).
-// 3. Handle EMBEDDED carriage returns the way a terminal would -- keep only
-//    what follows the last \r, so progress-bar overwrites show their final
-//    state rather than producing a blank line after the content.
-function cleanLine(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  const stripped = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b[^[]/g, '').replace(/\x1b/g, '')
-  // Strip trailing CRs first so a line whose only \r is the line-ending
-  // doesn't silently render as empty (which was killing every Jenkins
-  // log frame in the UI).
-  const trimmed = stripped.replace(/\r+$/, '')
-  const cr = trimmed.lastIndexOf('\r')
-  return cr >= 0 ? trimmed.slice(cr + 1) : trimmed
-}
