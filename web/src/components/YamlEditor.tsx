@@ -1,4 +1,13 @@
-import { useCallback, useMemo, useRef } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import CodeMirror, {
   EditorView,
   keymap,
@@ -62,6 +71,67 @@ const tabInsertTwoSpaces = keymap.of([
   },
 ])
 
+// -------------------------------------------------------------------------
+// Cross-instance fullscreen coordinator.
+//
+// Requirement 9: only one YamlEditor may be fullscreen at a time. Rather than
+// hoist state into a context (which would drag every consumer into the
+// design), we keep a tiny module-level singleton and let instances subscribe.
+// When any editor owns fullscreen, other instances hide their expand button
+// so two overlays can never coexist.
+// -------------------------------------------------------------------------
+let activeFullscreenOwner: string | null = null
+const fullscreenListeners = new Set<() => void>()
+
+function setFullscreenOwner(id: string | null) {
+  activeFullscreenOwner = id
+  fullscreenListeners.forEach((cb) => cb())
+}
+
+function subscribeFullscreen(cb: () => void): () => void {
+  fullscreenListeners.add(cb)
+  return () => {
+    fullscreenListeners.delete(cb)
+  }
+}
+
+// Inline SVG icons (kept tiny to avoid a lucide-react-style dep). 16px viewBox.
+function ExpandIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+    </svg>
+  )
+}
+
+function CollapseIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+    </svg>
+  )
+}
+
 /**
  * YAML editor wrapping CodeMirror 6.
  *
@@ -72,13 +142,26 @@ const tabInsertTwoSpaces = keymap.of([
  *     swaps are a prop update, not a remount — cursor/scroll/undo survive.
  *   - Custom Tab command inserts two spaces (matches the previous
  *     <textarea>'s `tabSize: 2`). Shift-Tab dedents by up to two spaces.
- *   - Escape is intentionally NOT trapped: keyboard-only users press Esc
- *     then Tab to move focus out of the editor. Standard CodeMirror a11y.
+ *   - Escape is intentionally NOT trapped in normal mode: keyboard-only users
+ *     press Esc then Tab to move focus out of the editor. In fullscreen mode
+ *     Escape closes fullscreen (see below).
  *   - Line wrapping is OFF: YAML is indentation-sensitive and soft-wrapped
  *     lines can visually mislead operators about indent depth.
  *   - `onCreateEditor` wires aria-labelledby onto the contenteditable so
  *     screen-readers announce the field label — the outer wrapper `id` alone
  *     wouldn't provide that association (divs are not label targets).
+ *
+ * Fullscreen (LeetCode-style):
+ *   - Approach B: toggle the SAME wrapper to position:fixed inset-0 z-60.
+ *     CodeMirror stays mounted through the transition, so cursor position,
+ *     scroll offset, and undo history all survive. The consumer never sees
+ *     the fullscreen state — it's fully encapsulated here.
+ *   - Only the CodeMirror `height` prop is swapped (to `calc(100vh - 52px)`)
+ *     so the editor re-layouts to fill the viewport without a remount.
+ *   - Escape closes; focus is trapped between the toggle button and the CM
+ *     contenteditable (the only two focusable landmarks in the overlay).
+ *   - Body scroll locked while fullscreen. Only one editor may fullscreen at
+ *     a time (module-level singleton); other instances hide their button.
  */
 export function YamlEditor({
   value,
@@ -92,6 +175,23 @@ export function YamlEditor({
 }: YamlEditorProps) {
   const themeMode = useStore((s) => s.theme)
   const cmRef = useRef<ReactCodeMirrorRef | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+
+  // Stable per-instance id used as the singleton ownership token.
+  const instanceId = useId()
+
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Re-render on singleton changes so we can hide the button when another
+  // instance owns fullscreen.
+  const [, bump] = useState(0)
+  useEffect(
+    () => subscribeFullscreen(() => bump((n) => n + 1)),
+    [],
+  )
+  const anotherOwnsFullscreen =
+    activeFullscreenOwner !== null && activeFullscreenOwner !== instanceId
 
   const themeExt = useMemo(
     () => (themeMode === 'dark' ? vscodeDark : vscodeLight),
@@ -142,13 +242,240 @@ export function YamlEditor({
     [labelledBy],
   )
 
+  const enterFullscreen = useCallback(() => {
+    // Guard: refuse if another instance already owns fullscreen. In practice
+    // the button is hidden on other instances, but this belt-and-braces
+    // check prevents races if the button flickers.
+    if (activeFullscreenOwner !== null && activeFullscreenOwner !== instanceId) {
+      return
+    }
+    setFullscreenOwner(instanceId)
+    setIsFullscreen(true)
+  }, [instanceId])
+
+  const exitFullscreen = useCallback(() => {
+    setIsFullscreen(false)
+    if (activeFullscreenOwner === instanceId) {
+      setFullscreenOwner(null)
+    }
+  }, [instanceId])
+
+  // Release the singleton if this instance unmounts while owning it (e.g.
+  // LiveYamlPreview remounts on `beat` change).
+  useEffect(
+    () => () => {
+      if (activeFullscreenOwner === instanceId) {
+        setFullscreenOwner(null)
+      }
+    },
+    [instanceId],
+  )
+
+  // Body scroll lock + document-level Escape listener while fullscreen.
+  useEffect(() => {
+    if (!isFullscreen) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        exitFullscreen()
+      }
+    }
+    // Capture phase so we win against CodeMirror's own key handling.
+    document.addEventListener('keydown', onKey, true)
+
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [isFullscreen, exitFullscreen])
+
+  // Focus containment (defense-in-depth): while fullscreen, if focus ever
+  // escapes the wrapper (e.g. Tab out of CodeMirror's search panel, browser
+  // chrome, an inadvertently focused sibling), pull it back to the toggle
+  // button. This complements the wrapper's onKeyDown trap and handles cases
+  // the trap doesn't enumerate (search panel inputs, future focusables).
+  useEffect(() => {
+    if (!isFullscreen) return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node | null
+      if (target && !wrapper.contains(target)) {
+        buttonRef.current?.focus()
+      }
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
+  }, [isFullscreen])
+
+  // Focus management: when entering fullscreen, focus the toggle button (it
+  // now shows the collapse icon and is one of the two focus landmarks). On
+  // exit, focus stays on that same button since it's the same DOM node.
+  useEffect(() => {
+    if (isFullscreen) {
+      buttonRef.current?.focus()
+    }
+  }, [isFullscreen])
+
+  // Focus trap: cycle Tab / Shift+Tab between the toggle button and the
+  // CodeMirror contenteditable. Only active in fullscreen.
+  //
+  // CRITICAL: In editable mode, CodeMirror's Prec.highest Tab keymap consumes
+  // Tab and calls preventDefault (but not stopPropagation) — so this React
+  // handler still fires on the bubble-phase delegated listener. We MUST NOT
+  // steal focus in that case, or every Tab keystroke would insert two spaces
+  // AND yank focus to the toggle button. The `e.defaultPrevented` short-circuit
+  // handles this: when CM (or any other handler) has already preventDefaulted
+  // the Tab, we leave focus alone. The trap therefore only fires when CM
+  // deliberately let Tab through (readOnly mode, or Shift+Tab-without-dedent).
+  const onWrapperKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!isFullscreen || e.key !== 'Tab') return
+      // If CM's Tab keymap consumed the event, don't interfere. This is what
+      // fixes the "Tab inserts spaces AND boots focus" bug in editable mode.
+      if (e.defaultPrevented) return
+      const btn = buttonRef.current
+      const cm = cmRef.current?.view?.contentDOM
+      if (!btn || !cm) return
+      const active = document.activeElement
+
+      // Forward Tab from within CM (only reached when CM did NOT preventDefault,
+      // i.e. readOnly or fell-through Shift+Tab): trap back to the button.
+      if (!e.shiftKey && (active === cm || cm.contains(active))) {
+        e.preventDefault()
+        btn.focus()
+        return
+      }
+      // Forward Tab from button → into CM.
+      if (!e.shiftKey && active === btn) {
+        e.preventDefault()
+        cm.focus()
+        return
+      }
+      // Shift+Tab from button → into CM.
+      if (e.shiftKey && active === btn) {
+        e.preventDefault()
+        cm.focus()
+        return
+      }
+      // Shift+Tab from CM → back to button.
+      if (e.shiftKey && (active === cm || cm.contains(active))) {
+        e.preventDefault()
+        btn.focus()
+        return
+      }
+    },
+    [isFullscreen],
+  )
+
+  // Merge className (border, ring, etc.) with fullscreen-only overrides that
+  // must beat consumer classes: edge-to-edge (no border-radius), solid page
+  // background, and viewport-sized fixed positioning above the sticky header
+  // (which is z-40).
+  const wrapperStyle: CSSProperties = isFullscreen
+    ? {
+        position: 'fixed',
+        inset: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 60,
+        background: 'var(--page-background)',
+        borderRadius: 0,
+        borderWidth: 0,
+        margin: 0,
+        // Small breathing room around CM for the toolbar and edges.
+        padding: '40px 12px 12px 12px',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        animation:
+          'yaml-editor-fs-in 200ms cubic-bezier(0.22, 0.7, 0.32, 1) both',
+        // Own stacking context so the button stays above CM.
+        display: 'block',
+      }
+    : {
+        // Establish a positioning context so the absolute-positioned expand
+        // button anchors to this wrapper (not to some ancestor). Kept minimal
+        // so consumer className border/rounded/height utilities still apply.
+        position: 'relative',
+      }
+
+  // In fullscreen, hand CodeMirror an explicit viewport-relative height that
+  // subtracts our wrapper padding — it re-layouts without unmounting.
+  const cmHeight = isFullscreen ? 'calc(100vh - 52px)' : height
+
   return (
-    <div id={id} className={className}>
+    <div
+      ref={wrapperRef}
+      id={id}
+      className={className}
+      style={wrapperStyle}
+      onKeyDown={onWrapperKeyDown}
+      // In fullscreen the wrapper acts like a modal region.
+      role={isFullscreen ? 'dialog' : undefined}
+      aria-modal={isFullscreen ? true : undefined}
+      // Prefer labelledby when the consumer wired one (AdvancedPage). Fall back
+      // to a static aria-label for consumers that render inside their own
+      // labelled panel (LiveYamlPreview) so the dialog is still announced.
+      aria-labelledby={isFullscreen && labelledBy ? labelledBy : undefined}
+      aria-label={isFullscreen && !labelledBy ? 'YAML editor (fullscreen)' : undefined}
+    >
+      {/* Local keyframe — mounted alongside the wrapper so the animation can
+          only ever apply when this editor is on screen. Small enough that a
+          second copy from a second YamlEditor mount is harmless. */}
+      <style>{`
+        @keyframes yaml-editor-fs-in {
+          from { opacity: 0; transform: scale(0.98); }
+          to   { opacity: 1; transform: scale(1); }
+        }
+      `}</style>
+
+      {/* Toggle button. Hidden when another editor owns fullscreen so two
+          overlays can never coexist (requirement 9). */}
+      {!anotherOwnsFullscreen && (
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => (isFullscreen ? exitFullscreen() : enterFullscreen())}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Expand editor to fullscreen'}
+          aria-pressed={isFullscreen}
+          title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Expand editor'}
+          style={{
+            position: 'absolute',
+            top: isFullscreen ? 8 : 6,
+            right: isFullscreen ? 12 : 6,
+            zIndex: 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            borderRadius: 4,
+            border: '1px solid var(--border-color)',
+            background: 'var(--input-background)',
+            color: 'var(--muted-color)',
+            cursor: 'pointer',
+            padding: 0,
+            lineHeight: 0,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--font-color)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--muted-color)'
+          }}
+        >
+          {isFullscreen ? <CollapseIcon /> : <ExpandIcon />}
+        </button>
+      )}
+
       <CodeMirror
         ref={cmRef}
         value={value}
-        height={height}
-        style={{ height }}
+        height={cmHeight}
+        style={{ height: cmHeight }}
         theme={themeExt}
         extensions={extensions}
         readOnly={readOnly}
