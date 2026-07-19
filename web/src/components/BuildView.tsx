@@ -52,21 +52,37 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
       onStatusChange(s === 'success' ? 'success' : 'idle')
       es.close()
     })
+    // NAMED 'error' events carry a JSON payload from the server -- those are
+    // terminal (build failed / cancelled) and we should close the stream.
+    // The DEFAULT EventSource error event, dispatched on transport-layer
+    // hiccups (idle-timeout on a proxy, brief TCP reset, browser buffer flush),
+    // has NO `data` field and the browser will auto-reconnect on its own if
+    // we leave the EventSource open. Closing on those was killing the stream
+    // after the first minor hiccup.
     es.addEventListener('error', (e) => {
       const raw = (e as MessageEvent).data
-      if (raw) {
-        try {
-          const data = JSON.parse(raw)
-          const s = data.status === 'cancelled' ? 'cancelled' : 'failed'
-          setStatus(s)
-          if (s === 'failed' && data.message) {
-            toast.danger(String(data.message), { title: 'Build failed', duration: 0 })
-          }
-          onStatusChange('failed')
-        } catch {
-          setStatus('failed')
+      if (!raw) {
+        // Native transport error. readyState === 0 (CONNECTING) means the
+        // browser is already reconnecting; readyState === 2 (CLOSED) means
+        // the server sent a real closure and we should stop trying.
+        if (es.readyState === EventSource.CLOSED) {
+          setStatus((prev) => (prev === 'running' ? 'failed' : prev))
           onStatusChange('failed')
         }
+        return
+      }
+      // Server-sent terminal error (our 'error' event has a JSON payload).
+      try {
+        const data = JSON.parse(raw)
+        const s = data.status === 'cancelled' ? 'cancelled' : 'failed'
+        setStatus(s)
+        if (s === 'failed' && data.message) {
+          toast.danger(String(data.message), { title: 'Build failed', duration: 0 })
+        }
+        onStatusChange('failed')
+      } catch {
+        setStatus('failed')
+        onStatusChange('failed')
       }
       es.close()
     })
@@ -427,12 +443,18 @@ function StatusBadge({ status }: { status: Status }) {
 
 // Clean a raw log line for display:
 // 1. Strip all ANSI/VT100 escape sequences (color, cursor movement, line-clear, etc.)
-// 2. Handle carriage returns the way a terminal would — keep only what follows
-//    the last \r, so progress-bar overwrites show their final state rather than
-//    producing a blank line after the content.
+// 2. Drop any trailing carriage returns (Windows-style CRLF that survived
+//    splitting on '\n' -- Jenkins' progressiveText preserves them).
+// 3. Handle EMBEDDED carriage returns the way a terminal would -- keep only
+//    what follows the last \r, so progress-bar overwrites show their final
+//    state rather than producing a blank line after the content.
 function cleanLine(s: string): string {
   // eslint-disable-next-line no-control-regex
   const stripped = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b[^[]/g, '').replace(/\x1b/g, '')
-  const cr = stripped.lastIndexOf('\r')
-  return cr >= 0 ? stripped.slice(cr + 1) : stripped
+  // Strip trailing CRs first so a line whose only \r is the line-ending
+  // doesn't silently render as empty (which was killing every Jenkins
+  // log frame in the UI).
+  const trimmed = stripped.replace(/\r+$/, '')
+  const cr = trimmed.lastIndexOf('\r')
+  return cr >= 0 ? trimmed.slice(cr + 1) : trimmed
 }
