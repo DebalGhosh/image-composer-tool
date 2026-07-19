@@ -157,20 +157,20 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
     await loadSeed(Number(seedPick), /* confirmReplace= */ true)
   }
 
-  const onBuild = () => {
+  const onBuild = async () => {
     if (!canBuild) return
-    // Build submission is intentionally disabled on this host — the backend
-    // wired to the /api/v1/builds endpoint runs privileged operations we don't
-    // want fired from this UI in this environment. Log the exact YAML that
-    // would have been submitted so the operator can copy-paste it into a
-    // trusted build path.
-    console.log(
-      '[ICT Web UI] Build Image (Advanced) — submission suppressed on this host. YAML that would have been sent to POST /api/v1/builds:',
-    )
-    console.log(yaml)
-    toast.info('Build submission is disabled on this host. Template YAML logged to the browser console.', {
-      title: 'Build Image (Advanced)',
-    })
+    // Fan the pasted YAML out to a random idle Jenkins worker. Same dispatch
+    // endpoint as the Basic tab -- the server picks the worker and returns a
+    // buildId that BuildView keys off for logs + details.
+    try {
+      setBusy(true)
+      const accepted = await api.dispatchJenkins(yaml)
+      onBuildStarted(accepted.buildId, yaml)
+    } catch (e) {
+      toast.danger((e as Error).message, { title: 'Build failed to start' })
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (

@@ -78,20 +78,36 @@ export interface BuildAccepted {
 export interface Artifact {
   name: string
   type: 'image' | 'sbom'
-  path: string
+  // Path is the local on-disk path for local builds; for Jenkins-dispatched
+  // builds it's the artifact's job-relative path (display-only). URL is set
+  // for Jenkins artifacts and points at their direct download endpoint --
+  // when present, the UI prefers `url` over the proxy path.
+  path?: string
+  url?: string
+}
+
+// Jenkins-run metadata surfaced in BuildDetails for dispatched builds.
+export interface JenkinsBuildInfo {
+  worker: string
+  jobUrl: string
+  buildUrl: string
+  buildNumber: number
+  queueUrl?: string
 }
 
 // Reproducibility/troubleshooting metadata for a build: the exact command that
-// ran, the resolved template (+ a download URL), and the per-build directories.
+// ran, the resolved template (+ a download URL), and either the per-build
+// directories (local path) or the Jenkins-run metadata (dispatched path).
 export interface BuildDetails {
   buildId: string
   status: string
   command: string
   template: string
   templateUrl: string
-  workDir: string
-  cacheDir: string
+  workDir?: string
+  cacheDir?: string
   summary?: ComposeSummary
+  jenkins?: JenkinsBuildInfo
 }
 
 export interface BuildComplete {

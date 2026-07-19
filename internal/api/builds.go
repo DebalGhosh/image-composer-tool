@@ -31,25 +31,45 @@ const (
 )
 
 // artifact describes one output file (image or SBOM).
+//
+// Path is the local on-disk path for artifacts produced by the local build
+// path. URL, when set, points at a remote-hosted artifact (Jenkins
+// /artifact/<relPath>) and the UI prefers it over Path for the download link.
+// Exactly one of Path / URL will be set in practice, but neither is required.
 type artifact struct {
 	Name string `json:"name"`
 	Type string `json:"type"` // "image" | "sbom"
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
+	URL  string `json:"url,omitempty"`
+}
+
+// jenkinsMeta carries the Jenkins-specific state for a dispatched build.
+// nil for locally-run builds.
+type jenkinsMeta struct {
+	Worker      string // e.g. "worker-04"
+	JobURL      string // https://…/job/ict-farm/job/workers/job/worker-04/
+	QueueURL    string // https://…/queue/item/<id>/
+	BuildURL    string // https://…/job/…/worker-04/<N>/  (set once assigned)
+	BuildNumber int    // 0 until assigned
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).
 //
 // All mutable fields are guarded by mu. ID, WorkDir, Template, and done are set
-// once at construction and are safe to read without the lock.
+// once at construction and are safe to read without the lock. Jenkins is
+// attached at construction for dispatched builds; its BuildURL/BuildNumber are
+// mutated under mu once the queue item resolves.
 type build struct {
-	ID           string
-	WorkDir      string
-	CacheDir     string
-	Template     string          // template file name (for display)
-	TemplatePath string          // resolved on-disk path (for download)
-	Command      string          // exact command run, for the UI's troubleshoot panel
-	Summary      *composeSummary // image configuration summary, nil for YAML builds
-	done         chan struct{}   // closed when the build finishes
+	ID               string
+	WorkDir          string
+	CacheDir         string
+	Template         string          // template file name (for display)
+	TemplatePath     string          // resolved on-disk path (for download)
+	TemplatePathYAML string          // raw YAML body for Jenkins builds (no on-disk file)
+	Command          string          // exact command run, for the UI's troubleshoot panel
+	Summary          *composeSummary // image configuration summary, nil for YAML builds
+	Jenkins          *jenkinsMeta    // set for Jenkins-dispatched builds; nil otherwise
+	done             chan struct{}   // closed when the build finishes
 
 	mu        sync.Mutex
 	status    buildStatus

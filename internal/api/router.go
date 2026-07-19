@@ -27,6 +27,12 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts/{name}", s.handleBuildArtifactDownload)
 
+	// Jenkins dispatch (implemented in jenkins.go). Kicks off a build on one
+	// of the worker-* jobs under the configured workers folder. All follow-on
+	// interactions (logs, details, artifacts) reuse the /api/v1/builds/{id}/*
+	// routes above because Jenkins-dispatched builds share the same tracker.
+	mux.HandleFunc("POST /api/v1/jenkins/dispatch", s.handleJenkinsDispatch)
+
 	// Web UI: serve the embedded SPA at the root. API routes above are more
 	// specific and take precedence in the mux. Only mounted when a real build is
 	// embedded; otherwise the UI is served by the Vite dev server.

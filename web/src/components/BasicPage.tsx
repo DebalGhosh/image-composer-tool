@@ -15,7 +15,7 @@ import { SummaryPanel } from './SummaryPanel'
 import { Collapsible } from './Collapsible'
 
 interface BasicPageProps {
-  onBuildStarted: (buildId: string) => void
+  onBuildStarted: (buildId: string, yaml?: string) => void
   buildInProgress: boolean
 }
 
@@ -115,26 +115,18 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
 
   const onBuild = async () => {
     if (!complete) return
-    // Build submission is intentionally disabled on this host — the backend
-    // wired to the /api/v1/builds endpoint runs privileged operations we
-    // don't want fired from this UI in this environment. Resolve the
-    // selection via /api/v1/templates/compose (a read-only lookup, safe) so
-    // we can log the exact template YAML that would have been submitted.
+    // Resolve the selection to a full template YAML (compose is a read-only
+    // lookup), then fan the build out to a random idle worker in the Jenkins
+    // farm. The dispatch endpoint returns a buildId keyed off the same
+    // tracker as the local-build path, so the log stream + details panel
+    // in BuildView work transparently.
     try {
       setBusy(true)
       const resolved = await api.compose(selection)
-      console.log(
-        '[ICT Web UI] Build Image (Basic) — submission suppressed on this host. Resolved template:',
-        resolved.template,
-        '\nYAML that would have been sent to POST /api/v1/builds:',
-      )
-      console.log(resolved.yaml)
-      toast.info(
-        'Build submission is disabled on this host. Resolved template YAML logged to the browser console.',
-        { title: 'Build Image (Basic)' },
-      )
+      const accepted = await api.dispatchJenkins(resolved.yaml)
+      onBuildStarted(accepted.buildId, resolved.yaml)
     } catch (e) {
-      toast.danger((e as Error).message, { title: 'Could not resolve template' })
+      toast.danger((e as Error).message, { title: 'Build failed to start' })
     } finally {
       setBusy(false)
     }

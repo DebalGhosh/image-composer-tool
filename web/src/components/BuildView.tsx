@@ -99,19 +99,46 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
           <span className="flex items-center gap-3">
             Build Status
             <StatusBadge status={status} />
+            {details?.jenkins?.worker && (
+              <span
+                className="rounded px-2 py-0.5 text-[11px] font-medium"
+                style={{
+                  background: 'color-mix(in srgb, var(--classic-blue) 12%, transparent)',
+                  color: 'var(--classic-blue)',
+                }}
+                title="Worker Jenkins picked for this build"
+              >
+                {details.jenkins.worker}
+                {details.jenkins.buildNumber ? ` · #${details.jenkins.buildNumber}` : ''}
+              </span>
+            )}
           </span>
         }
         actions={
-          (status === 'failed' || status === 'cancelled') ? (
-            <button
-              className="rounded border px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
-              style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
-              disabled={retrying}
-              onClick={onRetry}
-            >
-              {retrying ? 'Starting…' : '↺ Retry build'}
-            </button>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            {(details?.jenkins?.buildUrl || details?.jenkins?.jobUrl) && (
+              <a
+                className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
+                style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
+                href={details.jenkins.buildUrl || details.jenkins.jobUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open the running build (or the worker job) in Jenkins"
+              >
+                ↗ View in Jenkins
+              </a>
+            )}
+            {(status === 'failed' || status === 'cancelled') && (
+              <button
+                className="rounded border px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
+                style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
+                disabled={retrying}
+                onClick={onRetry}
+              >
+                {retrying ? 'Starting…' : '↺ Retry build'}
+              </button>
+            )}
+          </div>
         }
         className="mb-4"
       >
@@ -203,12 +230,59 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
                   ⬇ Download
                 </a>
               </div>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
-                <dt className="font-sans font-semibold">Work dir</dt>
-                <dd className="break-all">{details.workDir}</dd>
-                <dt className="font-sans font-semibold">Cache dir</dt>
-                <dd className="break-all">{details.cacheDir}</dd>
-              </dl>
+              {/* Jenkins metadata (dispatched path). Local-build panel just
+                  gets Work dir / Cache dir; Jenkins gets Worker + Build URL. */}
+              {details.jenkins ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
+                  <dt className="font-sans font-semibold">Worker</dt>
+                  <dd className="break-all">{details.jenkins.worker}</dd>
+                  {details.jenkins.buildNumber ? (
+                    <>
+                      <dt className="font-sans font-semibold">Build #</dt>
+                      <dd className="break-all">
+                        <a
+                          className="underline"
+                          style={{ color: 'var(--classic-blue)' }}
+                          href={details.jenkins.buildUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {details.jenkins.buildNumber}
+                        </a>
+                      </dd>
+                    </>
+                  ) : null}
+                  <dt className="font-sans font-semibold">Job</dt>
+                  <dd className="break-all">
+                    <a
+                      className="underline"
+                      style={{ color: 'var(--classic-blue)' }}
+                      href={details.jenkins.jobUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {details.jenkins.jobUrl}
+                    </a>
+                  </dd>
+                </dl>
+              ) : (
+                (details.workDir || details.cacheDir) && (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
+                    {details.workDir && (
+                      <>
+                        <dt className="font-sans font-semibold">Work dir</dt>
+                        <dd className="break-all">{details.workDir}</dd>
+                      </>
+                    )}
+                    {details.cacheDir && (
+                      <>
+                        <dt className="font-sans font-semibold">Cache dir</dt>
+                        <dd className="break-all">{details.cacheDir}</dd>
+                      </>
+                    )}
+                  </dl>
+                )
+              )}
             </div>
           )}
         </div>
@@ -271,36 +345,60 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               </tr>
             </thead>
             <tbody>
-              {artifacts.map((a) => (
-                <tr key={a.path} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-                  <td className="px-3 py-2 font-mono text-xs">{a.name}</td>
-                  <td className="px-3 py-2 uppercase">{a.type}</td>
-                  <td className="px-3 py-2 font-mono text-xs break-all" style={{ color: 'var(--muted-color)' }}>{a.path}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-                        style={{ borderColor: 'var(--border-color)' }}
-                        title="Copy path to clipboard"
-                        onClick={() => copyPath(a.path)}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                        Copy path
-                      </button>
-                      <a
-                        className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-                        style={{ borderColor: 'var(--border-color)' }}
-                        title="Download artifact"
-                        href={`/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`}
-                        download={a.name}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Download
-                      </a>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {artifacts.map((a, i) => {
+                // Prefer a Jenkins-hosted URL when the artifact carries one; fall
+                // back to the local proxy path otherwise. `key` uses name+index
+                // because Jenkins artifacts may repeat filenames across nested
+                // relative paths.
+                const href = a.url ?? `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`
+                const display = a.path ?? a.url ?? a.name
+                return (
+                  <tr key={`${a.name}-${i}`} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {a.url ? (
+                        <a
+                          className="underline"
+                          style={{ color: 'var(--classic-blue)' }}
+                          href={a.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {a.name}
+                        </a>
+                      ) : (
+                        a.name
+                      )}
+                    </td>
+                    <td className="px-3 py-2 uppercase">{a.type}</td>
+                    <td className="px-3 py-2 font-mono text-xs break-all" style={{ color: 'var(--muted-color)' }}>{display}</td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
+                          style={{ borderColor: 'var(--border-color)' }}
+                          title="Copy path or URL to clipboard"
+                          onClick={() => copyPath(display)}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                          Copy
+                        </button>
+                        <a
+                          className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
+                          style={{ borderColor: 'var(--border-color)' }}
+                          title="Download artifact"
+                          href={href}
+                          download={a.name}
+                          target={a.url ? '_blank' : undefined}
+                          rel={a.url ? 'noopener noreferrer' : undefined}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          Download
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </Card>

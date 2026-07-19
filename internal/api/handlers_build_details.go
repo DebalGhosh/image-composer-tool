@@ -15,16 +15,28 @@ import (
 
 // buildDetails carries the reproducibility/troubleshooting metadata the UI shows
 // in its collapsible "Build details" panel: the exact command, the resolved
-// template, and the per-build work/cache directories.
+// template, and either the per-build work/cache directories (local path) or the
+// Jenkins-run metadata (dispatched path).
 type buildDetails struct {
 	BuildID     string          `json:"buildId"`
 	Status      string          `json:"status"`
 	Command     string          `json:"command"`
 	Template    string          `json:"template"`
 	TemplateURL string          `json:"templateUrl"`
-	WorkDir     string          `json:"workDir"`
-	CacheDir    string          `json:"cacheDir"`
+	WorkDir     string          `json:"workDir,omitempty"`
+	CacheDir    string          `json:"cacheDir,omitempty"`
 	Summary     *composeSummary `json:"summary,omitempty"`
+	Jenkins     *jenkinsDetails `json:"jenkins,omitempty"`
+}
+
+// jenkinsDetails is the Jenkins-run subset of buildDetails, populated only for
+// dispatched builds. Empty (or absent) for locally-run ones.
+type jenkinsDetails struct {
+	Worker      string `json:"worker"`
+	JobURL      string `json:"jobUrl"`
+	BuildURL    string `json:"buildUrl"`
+	BuildNumber int    `json:"buildNumber"`
+	QueueURL    string `json:"queueUrl,omitempty"`
 }
 
 // handleBuildDetails returns the command and paths for a build so the UI can show
@@ -37,7 +49,7 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := b.snapshot()
-	writeJSON(w, http.StatusOK, buildDetails{
+	details := buildDetails{
 		BuildID:     id,
 		Status:      string(res.status),
 		Command:     b.Command,
@@ -46,11 +58,27 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 		WorkDir:     b.WorkDir,
 		CacheDir:    b.CacheDir,
 		Summary:     b.Summary,
-	})
+	}
+	if b.Jenkins != nil {
+		b.mu.Lock()
+		details.Jenkins = &jenkinsDetails{
+			Worker:      b.Jenkins.Worker,
+			JobURL:      b.Jenkins.JobURL,
+			BuildURL:    b.Jenkins.BuildURL,
+			BuildNumber: b.Jenkins.BuildNumber,
+			QueueURL:    b.Jenkins.QueueURL,
+		}
+		b.mu.Unlock()
+	}
+	writeJSON(w, http.StatusOK, details)
 }
 
 // handleBuildTemplate serves the exact template file that was built, as a
 // download, so the operator can inspect or reuse the resolved YAML.
+//
+// For local builds this reads the on-disk file at TemplatePath. For Jenkins
+// dispatches the YAML lives only in memory (TemplatePathYAML) -- we serve that
+// directly.
 func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	b, ok := s.tracker.get(id)
@@ -58,19 +86,32 @@ func (s *Server) handleBuildTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
 		return
 	}
-	if b.TemplatePath == "" {
+
+	name := b.Template
+	if name == "" {
+		if b.TemplatePath != "" {
+			name = filepath.Base(b.TemplatePath)
+		} else {
+			name = "template.yml"
+		}
+	}
+
+	var data []byte
+	switch {
+	case b.TemplatePathYAML != "":
+		data = []byte(b.TemplatePathYAML)
+	case b.TemplatePath != "":
+		var err error
+		data, err = os.ReadFile(b.TemplatePath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "TEMPLATE_READ", "cannot read template file")
+			return
+		}
+	default:
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "no template recorded for this build")
 		return
 	}
-	data, err := os.ReadFile(b.TemplatePath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "TEMPLATE_READ", "cannot read template file")
-		return
-	}
-	name := b.Template
-	if name == "" {
-		name = filepath.Base(b.TemplatePath)
-	}
+
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	_, _ = w.Write(data)

@@ -25,10 +25,6 @@ export default function App() {
   // the Basic selection when the last build came from the Advanced path.
   const lastYamlRef = useRef<string | null>(null)
 
-  const selection = useStore((s) => s.selection)
-  const selectionRef = useRef(selection)
-  selectionRef.current = selection
-
   const load = useCallback(() => {
     setState('loading')
     setError(null)
@@ -61,14 +57,14 @@ export default function App() {
   const onBuildStatusChange = (s: BuildStatus) => setBuildStatus(s)
 
   const onRetry = useCallback(async () => {
+    // Retry only appears in BuildView after a build has completed as failed or
+    // cancelled, so lastYamlRef is always set by the time we get here.
+    const yaml = lastYamlRef.current
+    if (yaml == null) return
     setRetrying(true)
     setBuildStatus('running')
     try {
-      const y = lastYamlRef.current
-      const accepted =
-        y != null
-          ? await api.startBuildFromYaml(y)
-          : await api.startBuild(selectionRef.current)
+      const accepted = await api.dispatchJenkins(yaml)
       setBuildId(accepted.buildId)
     } catch (e) {
       toast.danger((e as Error).message, { title: 'Retry failed' })

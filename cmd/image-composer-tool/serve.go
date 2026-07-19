@@ -5,6 +5,7 @@ package main
 
 import (
 	"net"
+	"os"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/api"
 	"github.com/spf13/cobra"
@@ -18,6 +19,16 @@ var (
 	serveWorkDir   string
 	serveSudo      bool
 	serveManifest  string
+
+	// Jenkins dispatch. When JENKINS_URL/USER/TOKEN are set (either via env
+	// vars or --jenkins-* flags), the /api/v1/jenkins/dispatch endpoint fans
+	// the UI's Build button out to a randomly-picked idle worker in the
+	// configured folder. When unset, the Jenkins endpoints return 503 and the
+	// server behaves like the upstream (local-build) build.
+	serveJenkinsURL     string
+	serveJenkinsUser    string
+	serveJenkinsToken   string
+	serveJenkinsWorkers string
 )
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
@@ -50,18 +61,42 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")
 
+	// Jenkins dispatch flags. Each defaults to the matching env var so operators
+	// can plug credentials in via `JENKINS_TOKEN=... ict serve` without exposing
+	// them on the command line (visible in ps output). Empty URL/USER/TOKEN
+	// disables the dispatch endpoint entirely (returns 503 on POST).
+	serveCmd.Flags().StringVar(&serveJenkinsURL, "jenkins-url", os.Getenv("JENKINS_URL"),
+		"Jenkins controller URL, e.g. https://cje-pg-prod01.devtools.intel.com/nex-cisv-devops02 (env: JENKINS_URL)")
+	serveCmd.Flags().StringVar(&serveJenkinsUser, "jenkins-user", os.Getenv("JENKINS_USER"),
+		"Jenkins user for API token auth (env: JENKINS_USER)")
+	serveCmd.Flags().StringVar(&serveJenkinsToken, "jenkins-token", os.Getenv("JENKINS_TOKEN"),
+		"Jenkins API token (env: JENKINS_TOKEN). Prefer the env var; the flag is visible in ps.")
+	serveCmd.Flags().StringVar(&serveJenkinsWorkers, "jenkins-workers-path", envOrDefault("JENKINS_WORKERS_PATH", "ict-farm/workers"),
+		"Folder path under which the worker-* jobs live (env: JENKINS_WORKERS_PATH)")
+
 	return serveCmd
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func executeServe(cmd *cobra.Command, args []string) error {
 	srv, err := api.New(api.Config{
 		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
-		Addr:         net.JoinHostPort(serveHost, servePort),
-		TemplatesDir: serveTemplates,
-		ICTBinary:    serveBinary,
-		WorkDir:      serveWorkDir,
-		Sudo:         serveSudo,
-		ManifestPath: serveManifest,
+		Addr:               net.JoinHostPort(serveHost, servePort),
+		TemplatesDir:       serveTemplates,
+		ICTBinary:          serveBinary,
+		WorkDir:            serveWorkDir,
+		Sudo:               serveSudo,
+		ManifestPath:       serveManifest,
+		JenkinsURL:         serveJenkinsURL,
+		JenkinsUser:        serveJenkinsUser,
+		JenkinsToken:       serveJenkinsToken,
+		JenkinsWorkersPath: serveJenkinsWorkers,
 	})
 	if err != nil {
 		return err

@@ -37,18 +37,13 @@ export const api = {
       body: JSON.stringify(req),
     }),
 
-  startBuild: (req: ComposeRequest) =>
-    jsonFetch<BuildAccepted>('/builds', {
-      method: 'POST',
-      body: JSON.stringify({ compose: req }),
-    }),
-
-  // Advanced tab: submit raw ICT template YAML. Backend's buildRequest struct
-  // (internal/api/builds.go) already accepts `{ yaml: "..." }` and writes it
-  // to workdir/template.yml before invoking `image-composer-tool build`, so
-  // no server changes are needed.
-  startBuildFromYaml: (yaml: string) =>
-    jsonFetch<BuildAccepted>('/builds', {
+  // Fan a build out to a random idle worker in the Jenkins farm. Server picks
+  // the worker (free-first, random fallback), triggers via buildWithParameters
+  // with just TEMPLATE_YAML overridden, and returns a buildId keyed off the
+  // same tracker used by the local-build path -- so /builds/{id}/logs and
+  // /builds/{id}/details work transparently for dispatched builds too.
+  dispatchJenkins: (yaml: string) =>
+    jsonFetch<BuildAccepted>('/jenkins/dispatch', {
       method: 'POST',
       body: JSON.stringify({ yaml }),
     }),
