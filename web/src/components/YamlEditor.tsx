@@ -109,6 +109,7 @@ export function YamlEditor({
           fontFamily:
             "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace)",
           lineHeight: '1.5',
+          overflow: 'auto',
         },
         '.cm-content': { padding: '8px 0' },
         '.cm-gutters': { userSelect: 'none' },
@@ -147,6 +148,7 @@ export function YamlEditor({
         ref={cmRef}
         value={value}
         height={height}
+        style={{ height }}
         theme={themeExt}
         extensions={extensions}
         readOnly={readOnly}
