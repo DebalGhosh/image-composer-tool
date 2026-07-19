@@ -11,6 +11,7 @@ import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
 import { Card } from './Card'
 import { LiveYamlPreview } from './LiveYamlPreview'
+import { SummaryPanel } from './SummaryPanel'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -226,63 +227,33 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
 
             {reviewOpen && review && (
               <Card title="Image Configuration Review" className="mt-5">
-                <div className="mt-3 grid grid-cols-1 gap-3 text-xs xl:grid-cols-2">
-                  <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
-                    <p
-                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
-                      style={{
-                        color: 'var(--title-text)',
-                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
-                      }}
-                    >
-                      Your Selection
-                    </p>
-                    <table className="w-full">
-                      <tbody>
-                        {([
-                          ['Vertical', review.summary.vertical],
-                          review.summary.sku ? ['SKU', review.summary.sku] : null,
-                          ['Platform', review.summary.platform],
-                          ['OS', review.summary.os],
-                          ['Image Type', review.summary.imageType.toUpperCase()],
-                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                          <tr key={k}>
-                            <td className="py-0.5 pr-3 w-24 font-semibold" style={{ color: 'var(--muted-color)' }}>{k}</td>
-                            <td className="py-0.5" style={{ color: 'var(--font-color)' }}>{v}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
-                    <p
-                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
-                      style={{
-                        color: 'var(--title-text)',
-                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
-                      }}
-                    >
-                      Image Configuration
-                    </p>
-                    <table className="w-full">
-                      <tbody>
-                        {([
-                          ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
-                          review.summary.description ? ['Description', review.summary.description] : null,
-                          ['Architecture', review.summary.architecture],
-                          review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
-                          ['Packages', `${review.summary.packageCount} packages`],
-                          review.summary.diskSize ? ['Disk', `${review.summary.diskSize}${review.summary.partitionTable ? `, ${review.summary.partitionTable.toUpperCase()}` : ''}${review.summary.partitionCount ? `, ${review.summary.partitionCount} partitions` : ''}`] : null,
-                          review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
-                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                          <tr key={k}>
-                            <td className="py-0.5 pr-3 w-24 font-semibold" style={{ color: 'var(--muted-color)' }}>{k}</td>
-                            <td className="py-0.5" style={{ color: 'var(--font-color)' }}>{v}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 text-sm xl:grid-cols-2">
+                  <SummaryPanel
+                    heading="Your Selection"
+                    rows={
+                      [
+                        ['Vertical', review.summary.vertical],
+                        review.summary.sku ? ['SKU', review.summary.sku] : null,
+                        ['Platform', review.summary.platform],
+                        ['OS', review.summary.os],
+                        ['Image Type', review.summary.imageType.toUpperCase()],
+                      ] as ([string, string] | null)[]
+                    }
+                  />
+                  <SummaryPanel
+                    heading="Image Configuration"
+                    rows={
+                      [
+                        ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
+                        review.summary.description ? ['Description', review.summary.description] : null,
+                        ['Architecture', review.summary.architecture],
+                        review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
+                        ['Packages', `${review.summary.packageCount} packages`],
+                        review.summary.diskSize ? ['Disk', `${review.summary.diskSize}${review.summary.partitionTable ? `, ${review.summary.partitionTable.toUpperCase()}` : ''}${review.summary.partitionCount ? `, ${review.summary.partitionCount} partitions` : ''}`] : null,
+                        review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
+                      ] as ([string, string] | null)[]
+                    }
+                  />
                 </div>
               </Card>
             )}

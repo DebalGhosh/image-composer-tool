@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import { useToast } from '../store'
 import type { Artifact, BuildDetails } from '../api/types'
 import { Card } from './Card'
+import { SummaryPanel } from './SummaryPanel'
 
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
@@ -144,63 +145,33 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
 
               {/* Selection + image configuration summary */}
               {details.summary && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded bg-white p-3 shadow-sm">
-                    <p
-                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
-                      style={{
-                        color: 'var(--title-text)',
-                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
-                      }}
-                    >
-                      Your Selection
-                    </p>
-                    <table className="w-full">
-                      <tbody>
-                        {([
-                          ['Vertical', details.summary.vertical],
-                          details.summary.sku ? ['SKU', details.summary.sku] : null,
-                          ['Platform', details.summary.platform],
-                          ['OS', details.summary.os],
-                          ['Image Type', details.summary.imageType.toUpperCase()],
-                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                          <tr key={k}>
-                            <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                            <td className="py-0.5 text-slate-700">{v}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="rounded bg-white p-3 shadow-sm">
-                    <p
-                      className="mb-2 pb-1.5 text-sm font-bold uppercase tracking-wide border-b"
-                      style={{
-                        color: 'var(--title-text)',
-                        borderColor: 'color-mix(in srgb, var(--classic-blue) 30%, transparent)',
-                      }}
-                    >
-                      Image Configuration
-                    </p>
-                    <table className="w-full">
-                      <tbody>
-                        {([
-                          ['Image', `${details.summary.imageName}${details.summary.imageVersion ? ` (v${details.summary.imageVersion})` : ''}`],
-                          details.summary.description ? ['Description', details.summary.description] : null,
-                          ['Architecture', details.summary.architecture],
-                          details.summary.kernelVersion ? ['Kernel', details.summary.kernelVersion] : null,
-                          ['Packages', `${details.summary.packageCount} packages`],
-                          details.summary.diskSize ? ['Disk', `${details.summary.diskSize}${details.summary.partitionTable ? `, ${details.summary.partitionTable.toUpperCase()}` : ''}${details.summary.partitionCount ? `, ${details.summary.partitionCount} partitions` : ''}`] : null,
-                          details.summary.hostname ? ['Hostname', details.summary.hostname] : null,
-                        ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
-                          <tr key={k}>
-                            <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                            <td className="py-0.5 text-slate-700">{v}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                  <SummaryPanel
+                    heading="Your Selection"
+                    rows={
+                      [
+                        ['Vertical', details.summary.vertical],
+                        details.summary.sku ? ['SKU', details.summary.sku] : null,
+                        ['Platform', details.summary.platform],
+                        ['OS', details.summary.os],
+                        ['Image Type', details.summary.imageType.toUpperCase()],
+                      ] as ([string, string] | null)[]
+                    }
+                  />
+                  <SummaryPanel
+                    heading="Image Configuration"
+                    rows={
+                      [
+                        ['Image', `${details.summary.imageName}${details.summary.imageVersion ? ` (v${details.summary.imageVersion})` : ''}`],
+                        details.summary.description ? ['Description', details.summary.description] : null,
+                        ['Architecture', details.summary.architecture],
+                        details.summary.kernelVersion ? ['Kernel', details.summary.kernelVersion] : null,
+                        ['Packages', `${details.summary.packageCount} packages`],
+                        details.summary.diskSize ? ['Disk', `${details.summary.diskSize}${details.summary.partitionTable ? `, ${details.summary.partitionTable.toUpperCase()}` : ''}${details.summary.partitionCount ? `, ${details.summary.partitionCount} partitions` : ''}`] : null,
+                        details.summary.hostname ? ['Hostname', details.summary.hostname] : null,
+                      ] as ([string, string] | null)[]
+                    }
+                  />
                 </div>
               )}
 
