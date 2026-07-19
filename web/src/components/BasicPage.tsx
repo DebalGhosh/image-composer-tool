@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { useStore, cascadingOptions } from '../store'
+import { useStore, cascadingOptions, useToast } from '../store'
 import { api } from '../api/client'
 import type { ComposeResponse } from '../api/types'
 import { Select } from './Select'
+import { Card } from './Card'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -13,11 +14,11 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
+  const toast = useToast()
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -36,11 +37,10 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     if (!complete) return
     try {
       setBusy(true)
-      setError(null)
       setReview(await api.compose(selection))
       setReviewOpen(true)
     } catch (e) {
-      setError((e as Error).message)
+      toast.danger((e as Error).message, { title: 'Review failed' })
     } finally {
       setBusy(false)
     }
@@ -50,11 +50,10 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     if (!complete) return
     try {
       setBusy(true)
-      setError(null)
       const accepted = await api.startBuild(selection)
       onBuildStarted(accepted.buildId)
     } catch (e) {
-      setError((e as Error).message)
+      toast.danger((e as Error).message, { title: 'Build failed to start' })
     } finally {
       setBusy(false)
     }
@@ -69,13 +68,18 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <h1 className="mb-1 text-2xl font-bold text-[#00285a]">Choose Image Configuration</h1>
-      <p className="mb-5 text-sm text-slate-500">
+      <h1
+        className="mb-1 text-2xl font-bold"
+        style={{ color: 'var(--title-text)' }}
+      >
+        Choose Image Configuration
+      </h1>
+      <p className="mb-5 text-sm text-[var(--muted-color)]">
         Select a targeted vertical, SKU, and platform. Pre-configured defaults are applied
         based on your selection.
       </p>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <Card>
         <Select
           label="Targeted Vertical"
           placeholder="-- Select Vertical --"
@@ -128,20 +132,26 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           onChange={(v) => setSel('imageType', v)}
         />
 
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
+        <label
+          className="mt-1 flex cursor-pointer items-center gap-2 text-sm"
+          style={{ color: 'var(--font-color)' }}
+        >
           <input
             type="checkbox"
             checked={reviewOpen}
             disabled={!complete}
             onChange={onToggleReview}
+            className="accent-[var(--classic-blue)]"
           />
           Review Image Configuration
         </label>
+      </Card>
 
-        {reviewOpen && review && (
+      {reviewOpen && review && (
+        <Card title="Image Configuration Review" className="mt-5">
           <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded bg-slate-100 p-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Your Selection</p>
+            <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--muted-color)' }}>Your Selection</p>
               <table className="w-full">
                 <tbody>
                   {([
@@ -152,15 +162,15 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                     ['Image Type', review.summary.imageType.toUpperCase()],
                   ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
                     <tr key={k}>
-                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                      <td className="py-0.5 text-slate-700">{v}</td>
+                      <td className="py-0.5 pr-3 w-24 font-semibold" style={{ color: 'var(--muted-color)' }}>{k}</td>
+                      <td className="py-0.5" style={{ color: 'var(--font-color)' }}>{v}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="rounded bg-slate-100 p-3">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Image Configuration</p>
+            <div className="rounded p-3" style={{ background: 'var(--page-background)' }}>
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--muted-color)' }}>Image Configuration</p>
               <table className="w-full">
                 <tbody>
                   {([
@@ -173,34 +183,33 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
                     review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
                   ] as ([string, string] | null)[]).filter((r): r is [string, string] => r !== null).map(([k, v]) => (
                     <tr key={k}>
-                      <td className="py-0.5 pr-3 font-semibold text-slate-500 w-24">{k}</td>
-                      <td className="py-0.5 text-slate-700">{v}</td>
+                      <td className="py-0.5 pr-3 w-24 font-semibold" style={{ color: 'var(--muted-color)' }}>{k}</td>
+                      <td className="py-0.5" style={{ color: 'var(--font-color)' }}>{v}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
-        )}
-      </div>
-
-      {error && <div className="mt-3 rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+        </Card>
+      )}
 
       <div className="mt-6">
         <button
-          className="rounded-md bg-[#0071c5] px-5 py-2.5 font-semibold text-white hover:bg-[#00285a] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ background: 'var(--metrics-gradient)' }}
           disabled={!complete || busy || buildInProgress}
           onClick={onBuild}
         >
           {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
         </button>
         {!complete && !buildInProgress && (
-          <span className="ml-3 text-sm text-slate-500">
+          <span className="ml-3 text-sm text-[var(--muted-color)]">
             Complete all selections to build.
           </span>
         )}
         {buildInProgress && (
-          <span className="ml-3 text-sm text-amber-600">
+          <span className="ml-3 text-sm" style={{ color: 'var(--warning)' }}>
             A build is already in progress. Switch to the Build Image tab to monitor it.
           </span>
         )}

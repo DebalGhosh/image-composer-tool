@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
-import { useStore } from './store'
+import { useStore, useToast } from './store'
 import { BasicPage } from './components/BasicPage'
 import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
+import { Header } from './components/Header'
+import { ToastContainer } from './components/toast/ToastContainer'
 
 type LoadState = 'loading' | 'ready' | 'error'
 type View = 'basic' | 'advanced' | 'builds'
@@ -11,6 +13,7 @@ type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
+  const toast = useToast()
   const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
 
@@ -36,10 +39,15 @@ export default function App() {
         setState('ready')
       })
       .catch((e) => {
-        setError((e as Error).message)
+        const msg = (e as Error).message
+        setError(msg)
         setState('error')
+        toast.danger(msg, {
+          title: 'Failed to load configuration',
+          duration: 0,
+        })
       })
-  }, [setManifest])
+  }, [setManifest, toast])
 
   useEffect(load, [load])
 
@@ -62,58 +70,36 @@ export default function App() {
           ? await api.startBuildFromYaml(y)
           : await api.startBuild(selectionRef.current)
       setBuildId(accepted.buildId)
+    } catch (e) {
+      toast.danger((e as Error).message, { title: 'Retry failed' })
     } finally {
       setRetrying(false)
     }
-  }, [])
-
-  const tabs: { id: View; label: string; enabled: boolean }[] = [
-    { id: 'basic', label: 'Basic', enabled: true },
-    { id: 'advanced', label: 'Advanced', enabled: true },
-    { id: 'builds', label: 'Build Image', enabled: true },
-  ]
+  }, [toast])
 
   return (
     <div className="min-h-full">
-      <nav className="flex items-center gap-6 bg-[#00285a] px-6 py-3 text-white">
-        <img src="/intel-logo.svg" alt="Intel" className="h-8 w-auto" />
-        <span className="font-bold">Image Composer Tool</span>
-        <div className="flex gap-1">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              disabled={!t.enabled}
-              onClick={() => t.enabled && setView(t.id)}
-              className={
-                'rounded px-3 py-1 text-sm ' +
-                (view === t.id
-                  ? 'bg-[#0071c5] text-white'
-                  : t.enabled
-                    ? 'text-slate-200 hover:bg-white/10'
-                    : 'cursor-not-allowed text-slate-500')
-              }
-              title={t.enabled ? undefined : 'Coming soon'}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        {/* Build status indicator — right side of nav */}
-        <div className="ml-auto">
-          <BuildIndicator status={buildStatus} onClick={() => setView('builds')} />
-        </div>
-      </nav>
+      <Header
+        view={view}
+        onViewChange={setView}
+        buildStatus={buildStatus}
+        onBuildIndicatorClick={() => setView('builds')}
+      />
 
       {state === 'loading' && (
-        <div className="m-6 text-sm text-slate-500">Loading configuration…</div>
+        <div className="m-6 text-sm text-[var(--muted-color)]">Loading configuration…</div>
       )}
 
       {state === 'error' && (
-        <div className="m-6 rounded bg-red-50 p-4 text-sm text-red-700">
+        <div className="m-6 text-sm" style={{ color: 'var(--muted-color)' }}>
           <p>Failed to load configuration: {error}</p>
-          <p className="mt-1 text-red-600">Is the API server running on :8080?</p>
+          <p className="mt-1">Is the API server running on :8080?</p>
           <button
-            className="mt-3 rounded border border-red-300 px-3 py-1 text-xs font-medium hover:bg-red-100"
+            className="mt-3 rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
+            style={{
+              borderColor: 'var(--classic-blue)',
+              color: 'var(--classic-blue)',
+            }}
             onClick={load}
           >
             Retry
@@ -145,30 +131,8 @@ export default function App() {
           </div>
         </>
       )}
-    </div>
-  )
-}
 
-function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () => void }) {
-  if (status === 'idle') return null
-  const cfg = {
-    running: { color: 'bg-yellow-400', pulse: true,  label: 'Build in progress' },
-    success: { color: 'bg-green-400',  pulse: false, label: 'Build completed' },
-    failed:  { color: 'bg-red-500',    pulse: false, label: 'Build failed' },
-  }[status]
-  return (
-    <button
-      onClick={onClick}
-      title={cfg.label}
-      className="flex items-center gap-2 rounded px-2 py-1 text-xs text-white/80 hover:bg-white/10"
-    >
-      <span className="relative flex h-3 w-3">
-        {cfg.pulse && (
-          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${cfg.color} opacity-75`} />
-        )}
-        <span className={`relative inline-flex h-3 w-3 rounded-full ${cfg.color}`} />
-      </span>
-      {cfg.label}
-    </button>
+      <ToastContainer />
+    </div>
   )
 }

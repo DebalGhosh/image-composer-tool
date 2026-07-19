@@ -1,5 +1,41 @@
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Manifest, Combination } from './api/types'
+
+// --- Theme bootstrap ---------------------------------------------------------
+//
+// Runs at module load so the .dark class is on <html> BEFORE React first paints.
+// A twin snippet in index.html runs even earlier (before any JS module loads)
+// so cold reloads are FOUC-free too; this block keeps the store's `theme`
+// field in lockstep with the class already on <html>.
+//
+// We reuse the SAME localStorage key that Header.tsx has been writing to
+// (`ict.theme`), so no migration is required.
+
+export type Theme = 'light' | 'dark'
+
+const THEME_KEY = 'ict.theme'
+
+function readInitialTheme(): Theme {
+  if (typeof window === 'undefined') return 'light'
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY)
+    if (stored === 'dark' || stored === 'light') return stored
+  } catch {
+    /* localStorage may be unavailable in private modes. */
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light'
+}
+
+function applyThemeClass(theme: Theme) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+}
+
+const initialTheme = readInitialTheme()
+applyThemeClass(initialTheme)
 
 // Selection state for the Basic tab.
 export interface Selection {
@@ -11,6 +47,32 @@ export interface Selection {
   imageType: string
 }
 
+// --- Toast slice --------------------------------------------------------
+// Kept in the app store (rather than a separate provider) so any component
+// can push a toast without threading context through the tree. The container
+// subscribes to `toasts` and renders them top-right.
+
+export type ToastVariant = 'info' | 'success' | 'warning' | 'danger'
+
+export interface Toast {
+  id: string
+  variant: ToastVariant
+  title?: string
+  message: string
+  /**
+   * Auto-dismiss delay in ms. 0 or negative means "sticky — user must dismiss".
+   * Default (set by pushToast) is 5000ms.
+   */
+  duration: number
+}
+
+export interface ToastInput {
+  variant: ToastVariant
+  title?: string
+  message: string
+  duration?: number
+}
+
 interface AppState {
   manifest: Manifest | null
   selection: Selection
@@ -18,10 +80,20 @@ interface AppState {
   // (Advanced -> Build Image -> Advanced) doesn't lose the operator's
   // unsaved YAML edits.
   advancedYaml: string
+  theme: Theme
+  toasts: Toast[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   setAdvancedYaml: (yaml: string) => void
+  setTheme: (theme: Theme) => void
+  pushToast: (t: ToastInput) => string
+  dismissToast: (id: string) => void
 }
+
+// Monotonic id — avoids Math.random collisions when several toasts land in
+// the same tick (e.g. concurrent api errors on initial load).
+let toastCounter = 0
+const nextToastId = () => `t${Date.now().toString(36)}-${(toastCounter++).toString(36)}`
 
 const emptySelection: Selection = {
   vertical: '',
@@ -36,8 +108,33 @@ export const useStore = create<AppState>((set) => ({
   manifest: null,
   selection: emptySelection,
   advancedYaml: '',
+  theme: initialTheme,
+  toasts: [],
   setManifest: (m) => set({ manifest: m }),
   setAdvancedYaml: (yaml) => set({ advancedYaml: yaml }),
+  setTheme: (theme) => {
+    try {
+      window.localStorage.setItem(THEME_KEY, theme)
+    } catch {
+      /* ignore */
+    }
+    applyThemeClass(theme)
+    set({ theme })
+  },
+  pushToast: (t) => {
+    const id = nextToastId()
+    const toast: Toast = {
+      id,
+      variant: t.variant,
+      title: t.title,
+      message: t.message,
+      duration: t.duration ?? 5000,
+    }
+    set((state) => ({ toasts: [...state.toasts, toast] }))
+    return id
+  },
+  dismissToast: (id) =>
+    set((state) => ({ toasts: state.toasts.filter((x) => x.id !== id) })),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
@@ -165,4 +262,32 @@ export function cascadingOptions(
     ) ?? null
 
   return { verticals, skus, platforms, oses, kernels, imageTypes, matched }
+}
+
+// --- useToast hook ------------------------------------------------------
+// Thin ergonomic wrapper over pushToast/dismissToast. Callers get typed
+// helpers (`toast.danger(...)`) instead of remembering the variant string.
+// The returned object is memoized so passing it into effect deps is safe.
+
+export interface ToastHelpers {
+  info: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
+  success: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
+  warning: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
+  danger: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
+  dismiss: (id: string) => void
+}
+
+export function useToast(): ToastHelpers {
+  const push = useStore((s) => s.pushToast)
+  const dismiss = useStore((s) => s.dismissToast)
+  return useMemo<ToastHelpers>(
+    () => ({
+      info: (message, opts) => push({ ...opts, variant: 'info', message }),
+      success: (message, opts) => push({ ...opts, variant: 'success', message }),
+      warning: (message, opts) => push({ ...opts, variant: 'warning', message }),
+      danger: (message, opts) => push({ ...opts, variant: 'danger', message }),
+      dismiss,
+    }),
+    [push, dismiss],
+  )
 }
