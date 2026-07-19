@@ -32,12 +32,11 @@ export function Header({
     <header
       className="sticky top-0 z-40 flex items-center gap-6 border-b px-6 py-3"
       style={{
-        /* Header always presents a dark backdrop so the product title reads
-         * cleanly in white across both themes. Dark mode leans further into
-         * SSF-UI's --navbar-bg-color; light mode uses --classic-blue for the
-         * Intel-brand strip look. */
-        background: 'var(--classic-blue)',
-        borderColor: 'color-mix(in srgb, black 30%, var(--classic-blue))',
+        /* Always-dark charcoal strip — matches SSF-UI's --navbar-bg-color
+         * (#242528). Same in both themes so the white title reads cleanly
+         * and there's no swap-flicker on theme toggle. */
+        background: '#242528',
+        borderColor: 'rgba(255,255,255,0.08)',
       }}
     >
       <div className="flex items-center gap-3">
