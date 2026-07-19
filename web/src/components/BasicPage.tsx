@@ -62,7 +62,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
     if (!handle) return
 
     const from = handle.getSize()
-    const to = complete ? 45 : 6
+    const to = complete ? 45 : 0
     if (Math.abs(from - to) < 0.5) return
 
     const duration = complete ? 520 : 380
@@ -141,7 +141,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
         <Panel
           /* No fixed defaultSize on the left — the browser will fill it as
              (100 - rightPanelDefaultSize) so the two always sum to 100 %. */
-          defaultSize={complete ? 55 : 94}
+          defaultSize={complete ? 55 : 100}
           minSize={35}
         >
           <div className="h-full overflow-y-auto p-6">
@@ -294,13 +294,18 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           </div>
         </Panel>
 
-        <PanelResizeHandle className="resize-handle group">
+        <PanelResizeHandle
+          className="resize-handle group"
+          /* When the preview is collapsed the handle would be a stray 8-px
+             vertical strip against the right edge of the form — hide it. */
+          style={{ display: complete ? 'block' : 'none' }}
+        >
           <div className="resize-grip" aria-hidden />
         </PanelResizeHandle>
 
         <Panel
           ref={rightPanelRef}
-          defaultSize={complete ? 45 : 6}
+          defaultSize={complete ? 45 : 0}
           minSize={0}
         >
           {/* Everything except the header row lives inside a fader that
