@@ -145,3 +145,14 @@ h2,
 h3 {
   letter-spacing: -0.011em;
 }
+
+/* Fullscreen terminal host. When the browser promotes this element into the
+ * fullscreen layer, override the flex-child sizing so it truly fills the
+ * physical screen. The 8px padding + rounded corners disappear because the
+ * viewport IS the terminal at that point. */
+.terminal-fullscreen-host:fullscreen {
+  padding: 0;
+  border-radius: 0;
+  width: 100vw;
+  height: 100vh;
+}

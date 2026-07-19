@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../store'
 import type { Artifact, BuildDetails } from '../api/types'
@@ -25,7 +25,34 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const terminalWrapRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
+
+  // Track the browser's fullscreen state so the toggle button icon flips
+  // correctly even when the user leaves fullscreen via Esc (browsers don't
+  // fire a click on our button in that case).
+  useEffect(() => {
+    const onChange = () => {
+      setIsFullscreen(document.fullscreenElement === terminalWrapRef.current)
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  const toggleFullscreen = () => {
+    const el = terminalWrapRef.current
+    if (!el) return
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+    } else {
+      // Safari uses the webkit-prefixed variant. Fall back if the standard
+      // API is missing; catch so we don't crash on unsupported browsers.
+      const req = el.requestFullscreen ??
+        (el as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> }).webkitRequestFullscreen
+      req?.call(el)?.catch(() => {})
+    }
+  }
 
   useEffect(() => {
     setLogs([])
@@ -342,15 +369,37 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Download logs
             </button>
+            <button
+              className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
+              style={{ borderColor: 'var(--border-color)' }}
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Exit fullscreen (Esc)' : 'View terminal fullscreen'}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            >
+              {isFullscreen ? (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/>
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 8V3h5"/><path d="M21 8V3h-5"/><path d="M3 16v5h5"/><path d="M21 16v5h-5"/>
+                </svg>
+              )}
+              {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            </button>
           </>
         }
         className="flex min-h-0 flex-1 flex-col"
       >
         {/* min-h-0 is critical on flex children -- default min-height:auto
             would prevent the terminal from shrinking below its content
-            size, breaking the flex-1 grow behavior. */}
+            size, breaking the flex-1 grow behavior. When this element is
+            the fullscreen target the browser paints its own black backdrop
+            outside the terminal; the inline padding and border-radius are
+            fine to keep because the terminal container fills the element. */}
         <div
-          className="min-h-0 flex-1 overflow-hidden rounded-md"
+          ref={terminalWrapRef}
+          className="terminal-fullscreen-host min-h-0 flex-1 overflow-hidden rounded-md"
           style={{
             background: 'var(--terminal-background, #0b1220)',
             padding: '8px',
