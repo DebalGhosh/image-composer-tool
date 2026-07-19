@@ -1,3 +1,17 @@
+/* Web-font stack — must come BEFORE any other rules per CSS @import spec.
+ *
+ *   UI text : Manrope   — the closest public-domain match to Intel's proprietary
+ *                          IntelOne Display (same DIN-inspired geometric grotesque,
+ *                          same open apertures). Ships via Google Fonts.
+ *   Code    : Intel One Mono — the *public* release of Intel's monospace typeface.
+ *                              Available on Google Fonts; used for the CodeMirror
+ *                              editor + build log surfaces.
+ *
+ * Intel's IntelOne Display itself is only distributed via the internal
+ * `@spark-design/fonts` npm package (Intel private registry), so we can't ship
+ * it to external users; Manrope is the closest legal substitute.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Intel+One+Mono:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 /* Class-based dark variant so we can flip theme via <html class="dark">. */
@@ -11,8 +25,8 @@
   --color-danger: #c81326;
   --color-success: #4e9f0f;
 
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --font-sans: 'Manrope', 'IntelOneDisplay', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Intel One Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
 /* CSS custom properties driven by the .dark class. */
@@ -50,8 +64,12 @@
 }
 
 .dark {
+  /* Section (card) background is DARKER than the page in dark mode so cards
+   * visually pop off the surrounding surface — matches SSF-UI's
+   * --card-background-color: #242528 sitting on --page-background: #2e2f32.
+   * Reversing light-mode's black-on-white contrast: dark-on-darker. */
   --page-background: #2e2f32;
-  --section-background: #2e2f32;
+  --section-background: #242528;
   --title-text: #ffffff;
   --font-color: #f4f5f5;
   --muted-color: #a8abb2;
@@ -63,6 +81,8 @@
   --toast-success-bg: rgba(78, 159, 15, 0.18);
   --toast-warning-bg: rgba(201, 143, 0, 0.18);
   --toast-info-bg: rgba(0, 153, 236, 0.18);
+
+  --options-shadow: 0px 2px 8px 0px rgba(0, 0, 0, 0.5);
 
   color-scheme: dark;
 }
@@ -78,6 +98,9 @@ body {
   font-family: var(--font-sans);
   background: var(--page-background);
   color: var(--font-color);
+  font-feature-settings: 'cv11', 'ss01'; /* Manrope stylistic sets: cleaner l/i, tabular numerals */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   transition:
     background-color 120ms ease,
     color 120ms ease;
@@ -90,4 +113,35 @@ body {
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
+}
+
+/* Native <select> option padding.
+ *
+ * Chrome / Firefox intentionally ignore CSS padding on <option> in the
+ * closed <select> and (mostly) in the open menu — the OS decides the menu
+ * chrome. The bits we CAN influence with modern engines are:
+ *   - line-height on <option> (Firefox honors this in the menu)
+ *   - padding on <option> (Firefox honors this; Chromium partially since 122)
+ *   - min-height on <option> (Chromium; Firefox partial)
+ * We set all three so users on both engines see a taller, breathier row than
+ * the ~20 px default. On Safari macOS the OS still owns the menu; nothing
+ * short of a full JS combobox can fix that.
+ */
+select option {
+  padding: 0.5rem 0.75rem;
+  min-height: 2.25rem;
+  line-height: 1.6;
+  background: var(--input-background);
+  color: var(--font-color);
+}
+select {
+  line-height: 1.6;
+}
+
+/* Manrope tuning: bump letter-spacing slightly on headings for the geometric
+ * feel of Intel One Display without pulling in the private font. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.011em;
 }

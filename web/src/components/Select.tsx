@@ -16,9 +16,11 @@ export const fieldLabelClass = 'mb-1 block text-sm font-semibold'
 /** Inline style paired with fieldLabelClass so the label follows the theme. */
 export const fieldLabelStyle: CSSProperties = { color: 'var(--title-text)' }
 
-/** Base recipe: bg, border, focus ring, disabled states via CSS vars. */
+/** Base recipe: bg, border, focus ring, disabled states via CSS vars.
+ *  py-2.5 (vs py-2) gives the closed control a bit more vertical breathing
+ *  room, matching SSF-UI's ~44 px control height. */
 export const controlBase =
-  'block w-full rounded-md border px-3 py-2 text-sm transition-colors ' +
+  'block w-full rounded-md border px-3 py-2.5 text-sm leading-6 transition-colors ' +
   'focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)] dark:focus:ring-[var(--tine-1)] ' +
   'disabled:cursor-not-allowed disabled:opacity-60'
 
