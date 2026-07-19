@@ -145,18 +145,6 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
         }
         actions={
           <div className="flex items-center gap-2">
-            {details?.jenkins?.artifactoryUrl && (
-              <a
-                className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
-                style={{ borderColor: 'var(--success)', color: 'var(--success)' }}
-                href={details.jenkins.artifactoryUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open the Artifactory directory holding the published build outputs"
-              >
-                📦 Artifacts
-              </a>
-            )}
             {(details?.jenkins?.buildUrl || details?.jenkins?.jobUrl) && (
               <a
                 className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
@@ -378,8 +366,9 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
         </div>
       </Card>
 
-      {artifacts.length > 0 && (
+      {(artifacts.length > 0 || details?.jenkins?.artifactoryUrl) && (
         <Card title="Artifacts" className="flex-none">
+          {artifacts.length > 0 && (
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left" style={{ background: 'color-mix(in srgb, var(--classic-blue) 12%, var(--section-background))' }}>
@@ -446,6 +435,59 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               })}
             </tbody>
           </table>
+          )}
+
+          {details?.jenkins?.artifactoryUrl && (
+            <div
+              className={
+                'flex flex-wrap items-center gap-3 text-xs ' +
+                // Add a top border + spacing ONLY when the file table above
+                // it is rendered. When mid-build (table empty, URL only),
+                // the row IS the card body, so a floating separator would
+                // sit under nothing and read as visual noise.
+                (artifacts.length > 0 ? 'mt-3 border-t pt-3' : '')
+              }
+              style={{ borderColor: 'var(--border-color)' }}
+            >
+              <span
+                className="font-semibold"
+                style={{ color: 'var(--muted-color)' }}
+              >
+                📦 Published to Artifactory
+              </span>
+              <a
+                className="flex-1 truncate font-mono underline"
+                style={{ color: 'var(--classic-blue)' }}
+                href={details.jenkins.artifactoryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={details.jenkins.artifactoryUrl}
+              >
+                {details.jenkins.artifactoryUrl}
+              </a>
+              <div className="flex items-center gap-1">
+                <button
+                  className="flex items-center gap-1 rounded border px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{ borderColor: 'var(--border-color)' }}
+                  title="Copy Artifactory URL to clipboard"
+                  onClick={() => details.jenkins && copyPath(details.jenkins.artifactoryUrl!)}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy URL
+                </button>
+                <a
+                  className="flex items-center gap-1 rounded border px-2 py-1 font-medium hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
+                  href={details.jenkins.artifactoryUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the Artifactory directory in a new tab"
+                >
+                  Open ↗
+                </a>
+              </div>
+            </div>
+          )}
         </Card>
       )}
     </div>
