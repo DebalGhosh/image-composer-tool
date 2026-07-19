@@ -12,6 +12,7 @@ import { Select } from './Select'
 import { Card } from './Card'
 import { LiveYamlPreview } from './LiveYamlPreview'
 import { SummaryPanel } from './SummaryPanel'
+import { Collapsible } from './Collapsible'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string) => void
@@ -230,38 +231,40 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
               </label>
             </Card>
 
-            {reviewOpen && review && (
-              <Card title="Image Configuration Review" className="mt-5">
-                <div className="mt-3 grid grid-cols-1 gap-3 text-sm xl:grid-cols-2">
-                  <SummaryPanel
-                    heading="Your Selection"
-                    rows={
-                      [
-                        ['Vertical', review.summary.vertical],
-                        review.summary.sku ? ['SKU', review.summary.sku] : null,
-                        ['Platform', review.summary.platform],
-                        ['OS', review.summary.os],
-                        ['Image Type', review.summary.imageType.toUpperCase()],
-                      ] as ([string, string] | null)[]
-                    }
-                  />
-                  <SummaryPanel
-                    heading="Image Configuration"
-                    rows={
-                      [
-                        ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
-                        review.summary.description ? ['Description', review.summary.description] : null,
-                        ['Architecture', review.summary.architecture],
-                        review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
-                        ['Packages', `${review.summary.packageCount} packages`],
-                        review.summary.diskSize ? ['Disk', `${review.summary.diskSize}${review.summary.partitionTable ? `, ${review.summary.partitionTable.toUpperCase()}` : ''}${review.summary.partitionCount ? `, ${review.summary.partitionCount} partitions` : ''}`] : null,
-                        review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
-                      ] as ([string, string] | null)[]
-                    }
-                  />
-                </div>
-              </Card>
-            )}
+            <Collapsible open={reviewOpen && !!review} className="mt-5">
+              {review && (
+                <Card title="Image Configuration Review">
+                  <div className="mt-3 grid grid-cols-1 gap-3 text-sm xl:grid-cols-2">
+                    <SummaryPanel
+                      heading="Your Selection"
+                      rows={
+                        [
+                          ['Vertical', review.summary.vertical],
+                          review.summary.sku ? ['SKU', review.summary.sku] : null,
+                          ['Platform', review.summary.platform],
+                          ['OS', review.summary.os],
+                          ['Image Type', review.summary.imageType.toUpperCase()],
+                        ] as ([string, string] | null)[]
+                      }
+                    />
+                    <SummaryPanel
+                      heading="Image Configuration"
+                      rows={
+                        [
+                          ['Image', `${review.summary.imageName}${review.summary.imageVersion ? ` (v${review.summary.imageVersion})` : ''}`],
+                          review.summary.description ? ['Description', review.summary.description] : null,
+                          ['Architecture', review.summary.architecture],
+                          review.summary.kernelVersion ? ['Kernel', review.summary.kernelVersion] : null,
+                          ['Packages', `${review.summary.packageCount} packages`],
+                          review.summary.diskSize ? ['Disk', `${review.summary.diskSize}${review.summary.partitionTable ? `, ${review.summary.partitionTable.toUpperCase()}` : ''}${review.summary.partitionCount ? `, ${review.summary.partitionCount} partitions` : ''}`] : null,
+                          review.summary.hostname ? ['Hostname', review.summary.hostname] : null,
+                        ] as ([string, string] | null)[]
+                      }
+                    />
+                  </div>
+                </Card>
+              )}
+            </Collapsible>
 
           </div>
         </Panel>
