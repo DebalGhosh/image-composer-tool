@@ -100,7 +100,13 @@ export function TerminalLog({ logs, className }: TerminalLogProps) {
     })
 
     const fit = new FitAddon()
-    const links = new WebLinksAddon()
+    // Without a click handler WebLinksAddon just underlines URLs on hover --
+    // clicks are ignored. Open in a new tab so long-running build logs stay
+    // put. noopener/noreferrer to keep the child from reaching back into
+    // window.opener.
+    const links = new WebLinksAddon((_event, url) => {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    })
     term.loadAddon(fit)
     term.loadAddon(links)
 

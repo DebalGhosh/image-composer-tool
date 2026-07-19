@@ -34,9 +34,24 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
     setDetails(null)
     setDetailsOpen(false)
 
-    // Fetch the command + resolved template paths for the troubleshoot panel.
-    // Best-effort: a failure here shouldn't disrupt the log stream.
-    api.buildDetails(buildId).then(setDetails).catch(() => {})
+    // Fetch build details on mount, then poll every 5 s until we've seen
+    // both a Jenkins buildNumber AND the Artifactory URL. The URL only
+    // surfaces after the PUBLISH stage echoes it -- polling avoids adding
+    // another event type to the SSE contract just for this one field.
+    // The interval is cheap (a JSON GET against localhost) and stops as
+    // soon as the URL lands or the SSE stream reports a terminal state.
+    let stopPolling = false
+    const pollDetails = async () => {
+      try {
+        const d = await api.buildDetails(buildId)
+        setDetails(d)
+        if (d.jenkins?.artifactoryUrl) return // done; stop scheduling
+      } catch {
+        /* transient, keep polling */
+      }
+      if (!stopPolling) setTimeout(pollDetails, 5000)
+    }
+    pollDetails()
 
     const es = new EventSource(api.logsUrl(buildId))
 
@@ -87,7 +102,10 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
       es.close()
     })
 
-    return () => es.close()
+    return () => {
+      stopPolling = true
+      es.close()
+    }
   }, [buildId])
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
@@ -127,6 +145,18 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
         }
         actions={
           <div className="flex items-center gap-2">
+            {details?.jenkins?.artifactoryUrl && (
+              <a
+                className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
+                style={{ borderColor: 'var(--success)', color: 'var(--success)' }}
+                href={details.jenkins.artifactoryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open the Artifactory directory holding the published build outputs"
+              >
+                📦 Artifacts
+              </a>
+            )}
             {(details?.jenkins?.buildUrl || details?.jenkins?.jobUrl) && (
               <a
                 className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"

@@ -93,6 +93,10 @@ export interface JenkinsBuildInfo {
   buildUrl: string
   buildNumber: number
   queueUrl?: string
+  // Artifactory upload directory the PUBLISH stage echoed via:
+  //   Artefacts published to: https://af01p-png.…/artifactory/…/<worker>/<datetime>/
+  // Undefined until PUBLISH runs (mid-build).
+  artifactoryUrl?: string
 }
 
 // Reproducibility/troubleshooting metadata for a build: the exact command that

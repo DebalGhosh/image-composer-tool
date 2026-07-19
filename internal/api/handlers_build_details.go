@@ -32,11 +32,12 @@ type buildDetails struct {
 // jenkinsDetails is the Jenkins-run subset of buildDetails, populated only for
 // dispatched builds. Empty (or absent) for locally-run ones.
 type jenkinsDetails struct {
-	Worker      string `json:"worker"`
-	JobURL      string `json:"jobUrl"`
-	BuildURL    string `json:"buildUrl"`
-	BuildNumber int    `json:"buildNumber"`
-	QueueURL    string `json:"queueUrl,omitempty"`
+	Worker         string `json:"worker"`
+	JobURL         string `json:"jobUrl"`
+	BuildURL       string `json:"buildUrl"`
+	BuildNumber    int    `json:"buildNumber"`
+	QueueURL       string `json:"queueUrl,omitempty"`
+	ArtifactoryURL string `json:"artifactoryUrl,omitempty"` // set after PUBLISH stage echoes it
 }
 
 // handleBuildDetails returns the command and paths for a build so the UI can show
@@ -62,11 +63,12 @@ func (s *Server) handleBuildDetails(w http.ResponseWriter, r *http.Request) {
 	if b.Jenkins != nil {
 		b.mu.Lock()
 		details.Jenkins = &jenkinsDetails{
-			Worker:      b.Jenkins.Worker,
-			JobURL:      b.Jenkins.JobURL,
-			BuildURL:    b.Jenkins.BuildURL,
-			BuildNumber: b.Jenkins.BuildNumber,
-			QueueURL:    b.Jenkins.QueueURL,
+			Worker:         b.Jenkins.Worker,
+			JobURL:         b.Jenkins.JobURL,
+			BuildURL:       b.Jenkins.BuildURL,
+			BuildNumber:    b.Jenkins.BuildNumber,
+			QueueURL:       b.Jenkins.QueueURL,
+			ArtifactoryURL: b.Jenkins.ArtifactoryURL,
 		}
 		b.mu.Unlock()
 	}

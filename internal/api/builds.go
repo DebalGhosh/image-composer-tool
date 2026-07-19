@@ -51,6 +51,11 @@ type jenkinsMeta struct {
 	QueueURL    string // https://…/queue/item/<id>/
 	BuildURL    string // https://…/job/…/worker-04/<N>/  (set once assigned)
 	BuildNumber int    // 0 until assigned
+	// Artifactory upload directory the PUBLISH stage prints via
+	//   echo "Artefacts published to: https://af01p-png.…/artifactory/<repo>/<job>/<datetime>/"
+	// Captured from the tailed log so the UI can surface it as a first-class
+	// hyperlink instead of making the operator search the log.
+	ArtifactoryURL string
 }
 
 // build is the in-memory record of a single build (MVP-1: no persistence).

@@ -41,6 +41,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
+
+// artifactoryEcho catches the PUBLISH stage's marker line, e.g.:
+//
+//	Artefacts published to: https://af01p-png.devtools.intel.com/artifactory/…/
+//
+// so the UI can render the URL as a first-class hyperlink in the Build
+// Status card. Matches British (Artefact) and American (Artifact) spellings,
+// with or without a plural s, case-insensitively. \S already excludes \r.
+var artifactoryEcho = regexp.MustCompile(`(?i)Art[ei]facts?\s+published\s+to:\s+(https?://\S+)`)
 
 // jenkinsClient is a thin HTTP client over the Jenkins REST API. All calls use
 // HTTP Basic auth with the configured user + API token.
@@ -549,6 +559,7 @@ func (s *Server) runJenkinsBuild(b *build) {
 			nl := strings.LastIndexByte(str, '\n')
 			if nl >= 0 {
 				for _, line := range strings.Split(str[:nl], "\n") {
+					s.captureArtifactoryURL(b, line)
 					b.appendLog(line)
 				}
 				remainder := str[nl+1:]
@@ -559,7 +570,9 @@ func (s *Server) runJenkinsBuild(b *build) {
 		offset = next
 		if !more {
 			if partial.Len() > 0 {
-				b.appendLog(partial.String())
+				tail := partial.String()
+				s.captureArtifactoryURL(b, tail)
+				b.appendLog(tail)
 				partial.Reset()
 			}
 			break
@@ -618,5 +631,30 @@ func (s *Server) runJenkinsBuild(b *build) {
 		// intermediate outputs even when the top-level result is FAILURE.
 		b.finish(statusFailed, arts, msg)
 	}
+}
+
+// captureArtifactoryURL scans a single log line for the PUBLISH stage's
+// "Artefacts published to: <url>" echo and records the URL under mu so
+// the /details endpoint can surface it to the UI as a hyperlink.
+// Idempotent: only the first match is kept (subsequent lines that mention
+// the URL don't overwrite it).
+func (s *Server) captureArtifactoryURL(b *build, line string) {
+	if b.Jenkins == nil {
+		return
+	}
+	// Cheap early-out: the marker string is unique, avoid regex on every
+	// line for the tens of thousands of unrelated lines a build produces.
+	if !strings.Contains(line, "published to:") {
+		return
+	}
+	m := artifactoryEcho.FindStringSubmatch(line)
+	if m == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.Jenkins.ArtifactoryURL == "" {
+		b.Jenkins.ArtifactoryURL = m[1]
+	}
+	b.mu.Unlock()
 }
 
