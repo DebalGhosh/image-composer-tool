@@ -115,12 +115,26 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
 
   const onBuild = async () => {
     if (!complete) return
+    // Build submission is intentionally disabled on this host — the backend
+    // wired to the /api/v1/builds endpoint runs privileged operations we
+    // don't want fired from this UI in this environment. Resolve the
+    // selection via /api/v1/templates/compose (a read-only lookup, safe) so
+    // we can log the exact template YAML that would have been submitted.
     try {
       setBusy(true)
-      const accepted = await api.startBuild(selection)
-      onBuildStarted(accepted.buildId)
+      const resolved = await api.compose(selection)
+      console.log(
+        '[ICT Web UI] Build Image (Basic) — submission suppressed on this host. Resolved template:',
+        resolved.template,
+        '\nYAML that would have been sent to POST /api/v1/builds:',
+      )
+      console.log(resolved.yaml)
+      toast.info(
+        'Build submission is disabled on this host. Resolved template YAML logged to the browser console.',
+        { title: 'Build Image (Basic)' },
+      )
     } catch (e) {
-      toast.danger((e as Error).message, { title: 'Build failed to start' })
+      toast.danger((e as Error).message, { title: 'Could not resolve template' })
     } finally {
       setBusy(false)
     }
