@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
+import { AdvancedPage } from './components/AdvancedPage'
 import { BuildImagePage } from './components/BuildImagePage'
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -17,6 +18,9 @@ export default function App() {
   const [buildId, setBuildId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [buildStatus, setBuildStatus] = useState<BuildStatus>('idle')
+  // Last YAML submitted from the Advanced tab. Retry replays this instead of
+  // the Basic selection when the last build came from the Advanced path.
+  const lastYamlRef = useRef<string | null>(null)
 
   const selection = useStore((s) => s.selection)
   const selectionRef = useRef(selection)
@@ -39,7 +43,8 @@ export default function App() {
 
   useEffect(load, [load])
 
-  const onBuildStarted = (id: string) => {
+  const onBuildStarted = (id: string, yaml?: string) => {
+    lastYamlRef.current = yaml ?? null
     setBuildId(id)
     setBuildStatus('running')
     setView('builds')
@@ -51,7 +56,11 @@ export default function App() {
     setRetrying(true)
     setBuildStatus('running')
     try {
-      const accepted = await api.startBuild(selectionRef.current)
+      const y = lastYamlRef.current
+      const accepted =
+        y != null
+          ? await api.startBuildFromYaml(y)
+          : await api.startBuild(selectionRef.current)
       setBuildId(accepted.buildId)
     } finally {
       setRetrying(false)
@@ -60,7 +69,7 @@ export default function App() {
 
   const tabs: { id: View; label: string; enabled: boolean }[] = [
     { id: 'basic', label: 'Basic', enabled: true },
-    { id: 'advanced', label: 'Advanced', enabled: false },
+    { id: 'advanced', label: 'Advanced', enabled: true },
     { id: 'builds', label: 'Build Image', enabled: true },
   ]
 
@@ -116,6 +125,12 @@ export default function App() {
         <>
           <div hidden={view !== 'basic'}>
             <BasicPage
+              onBuildStarted={onBuildStarted}
+              buildInProgress={buildStatus === 'running'}
+            />
+          </div>
+          <div hidden={view !== 'advanced'}>
+            <AdvancedPage
               onBuildStarted={onBuildStarted}
               buildInProgress={buildStatus === 'running'}
             />

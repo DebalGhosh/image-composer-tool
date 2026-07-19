@@ -43,6 +43,16 @@ export const api = {
       body: JSON.stringify({ compose: req }),
     }),
 
+  // Advanced tab: submit raw ICT template YAML. Backend's buildRequest struct
+  // (internal/api/builds.go) already accepts `{ yaml: "..." }` and writes it
+  // to workdir/template.yml before invoking `image-composer-tool build`, so
+  // no server changes are needed.
+  startBuildFromYaml: (yaml: string) =>
+    jsonFetch<BuildAccepted>('/builds', {
+      method: 'POST',
+      body: JSON.stringify({ yaml }),
+    }),
+
   // Cancel an in-flight build. The endpoint arrives with Story 3; until then the
   // backend returns 404 and the caller surfaces that as a cancel failure.
   cancelBuild: (buildId: string) =>

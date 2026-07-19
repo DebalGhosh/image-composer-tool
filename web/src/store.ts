@@ -14,8 +14,13 @@ export interface Selection {
 interface AppState {
   manifest: Manifest | null
   selection: Selection
+  // Advanced tab draft. Lifted into the store so switching tabs
+  // (Advanced -> Build Image -> Advanced) doesn't lose the operator's
+  // unsaved YAML edits.
+  advancedYaml: string
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
+  setAdvancedYaml: (yaml: string) => void
 }
 
 const emptySelection: Selection = {
@@ -30,7 +35,9 @@ const emptySelection: Selection = {
 export const useStore = create<AppState>((set) => ({
   manifest: null,
   selection: emptySelection,
+  advancedYaml: '',
   setManifest: (m) => set({ manifest: m }),
+  setAdvancedYaml: (yaml) => set({ advancedYaml: yaml }),
   setField: (key, value) =>
     set((state) => {
       const selection = { ...state.selection, [key]: value }
