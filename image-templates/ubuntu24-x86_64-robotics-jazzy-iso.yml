@@ -191,10 +191,10 @@ systemConfig:
     - intel-driver-compiler-npu
 
   kernel:
-    version: "6.17"
+    version: "7.0.0-28"
     cmdline: "console=ttyS0,115200 console=tty0 loglevel=7"
     packages:
-      - linux-image-generic-hwe-24.04
+      - linux-image-7.0.0-28-generic
 
   configurations:
     # ── ROS 2 environment setup ────────────────────────────────────
