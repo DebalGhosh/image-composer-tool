@@ -1,4 +1,4 @@
-import { Children, isValidElement, type CSSProperties, type ReactElement, type ReactNode, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { Children, isValidElement, useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactElement, type ReactNode, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import type { DropdownOption } from '../store'
 import { Combobox, type ComboboxItem } from './Combobox'
 
@@ -142,15 +142,63 @@ export function TextInput({
   )
 }
 
+/**
+ * Auto-growing textarea: on mount and whenever `value` changes we set
+ * inline `height` to match the content's scrollHeight, so the field opens
+ * without a scrollbar and grows/shrinks with typed input. The user can
+ * still drag the corner resize handle — the first drag flips
+ * `manualResizeRef` on and we stop auto-sizing after that. If the caller
+ * sets an explicit height via `style` or `rows`, autosize is skipped
+ * entirely (caller wins).
+ */
 export function TextArea({
   className = '',
   style,
+  value,
   ...rest
 }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement | null>(null)
+  const manualResizeRef = useRef(false)
+  const explicitHeight = style && typeof style.height !== 'undefined'
+
+  const resize = () => {
+    const el = ref.current
+    if (!el || manualResizeRef.current || explicitHeight) return
+    // Reset first so we can measure scrollHeight downward when the user
+    // deletes content — otherwise the field would only ever grow.
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }
+
+  // Layout effect so the correct height paints on the very first frame,
+  // not after a visible one-line flash + resize.
+  useLayoutEffect(resize)
+
+  // Recompute on window resize — line-count depends on width, so the
+  // wrapped height needs to follow.
+  useEffect(() => {
+    const onResize = () => resize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <textarea
+      ref={ref}
       className={textareaControl + (className ? ' ' + className : '')}
       style={{ ...controlBaseStyle, ...style }}
+      value={value}
+      onMouseDown={(e) => {
+        // The resize handle sits in the bottom-right ~14px square. If the
+        // user grabs it we stop autosizing so subsequent typing doesn't
+        // fight their manual height.
+        const el = e.currentTarget
+        const box = el.getBoundingClientRect()
+        const inHandle =
+          e.clientX >= box.right - 16 && e.clientY >= box.bottom - 16
+        if (inHandle) manualResizeRef.current = true
+      }}
       {...rest}
     />
   )
