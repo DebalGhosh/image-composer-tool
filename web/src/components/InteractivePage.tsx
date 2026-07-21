@@ -588,7 +588,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                 value={draft.disk.sizeGiB}
                 onChange={(v) => patchDisk({ sizeGiB: v })}
                 min={2}
-                max={64}
+                max={512}
                 step={1}
                 unit="GiB"
               />
