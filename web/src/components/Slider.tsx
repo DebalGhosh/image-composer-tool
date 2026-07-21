@@ -66,12 +66,13 @@ const sliderCss = `
   border: 2px solid var(--input-background);
   margin-top: -5px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-  /* Smooth grow/shrink on hover and focus. Transition both scale and
-   * the outer halo box-shadow together so the transform and the ring
-   * land at the same time. */
+  /* Smooth grow/shrink + fill-tone shift on hover, focus, and drag.
+   * Transition scale, halo, and background together so the three land
+   * on the same frame. */
   transition:
-    box-shadow 180ms cubic-bezier(0.22, 0.7, 0.32, 1),
-    transform  180ms cubic-bezier(0.22, 0.7, 0.32, 1);
+    box-shadow      180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    transform       180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    background-color 180ms ease;
 }
 .ict-slider-range::-moz-range-thumb {
   width: 16px; height: 16px; border-radius: 9999px;
@@ -79,30 +80,37 @@ const sliderCss = `
   border: 2px solid var(--input-background);
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
   transition:
-    box-shadow 180ms cubic-bezier(0.22, 0.7, 0.32, 1),
-    transform  180ms cubic-bezier(0.22, 0.7, 0.32, 1);
+    box-shadow      180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    transform       180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    background-color 180ms ease;
 }
 /* Hover on the range input propagates through the shadow tree to the
- * thumb pseudo. Grow ~30% and add a softer halo — smaller than the
- * :focus-visible ring so mouse hover stays visually distinct from
- * keyboard focus. */
+ * thumb pseudo. Grow ~30%, soft halo, AND lighten the fill to Tine-1
+ * (SSF-UI's sky-blue) so the state change reads at a glance. Kept
+ * distinct from :focus-visible so mouse hover stays visually separate
+ * from keyboard focus. */
 .ict-slider-range:hover:not(:disabled)::-webkit-slider-thumb {
   transform: scale(1.35);
-  box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.16), 0 1px 2px rgba(0,0,0,0.25);
+  background-color: var(--tine-1);
+  box-shadow: 0 0 0 4px rgba(0, 153, 236, 0.18), 0 1px 2px rgba(0,0,0,0.25);
 }
 .ict-slider-range:hover:not(:disabled)::-moz-range-thumb {
   transform: scale(1.35);
-  box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.16), 0 1px 2px rgba(0,0,0,0.25);
+  background-color: var(--tine-1);
+  box-shadow: 0 0 0 4px rgba(0, 153, 236, 0.18), 0 1px 2px rgba(0,0,0,0.25);
 }
-/* Active (mouse-down / drag) — a hair larger still, with a brighter
- * halo, so the "grabbed" state is unmistakable. */
+/* Active (mouse-down / drag) — a hair larger still, back to the
+ * classic-blue fill (so the "you're grabbing it now" state reads as
+ * MORE saturated than hover), with a brighter halo. */
 .ict-slider-range:active:not(:disabled)::-webkit-slider-thumb {
   transform: scale(1.5);
-  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.28), 0 2px 4px rgba(0,0,0,0.3);
+  background-color: var(--classic-blue);
+  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.32), 0 2px 4px rgba(0,0,0,0.3);
 }
 .ict-slider-range:active:not(:disabled)::-moz-range-thumb {
   transform: scale(1.5);
-  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.28), 0 2px 4px rgba(0,0,0,0.3);
+  background-color: var(--classic-blue);
+  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.32), 0 2px 4px rgba(0,0,0,0.3);
 }
 .ict-slider-range:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.28);
