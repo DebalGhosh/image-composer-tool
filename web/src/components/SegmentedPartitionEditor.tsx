@@ -506,8 +506,47 @@ export function SegmentedPartitionEditor({
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const prevOffsetsRef = useRef<Map<string, number>>(new Map())
   const prevOrderRef = useRef<string[]>([])
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   const currentIds = value.map((p) => p.id)
+
+  // Keep `prevOffsetsRef` in lockstep with the actual DOM positions
+  // whenever layout shifts for reasons OTHER than a reorder — Card
+  // expand/collapse animations, viewport resizes, the parent panel
+  // resizing, fonts loading. Without this, the very first user-driven
+  // reorder computes `dy` against a stale baseline captured while the
+  // Card was still mid-expand animation, and every row appears to have
+  // "moved" by that leftover expand delta. The FLIP effect below then
+  // animates the whole list.
+  //
+  // The ResizeObserver fires on any bounding-box change of the list
+  // container OR any of the individual rows; the callback simply
+  // re-captures each row's top so the next reorder computes against
+  // truthful "just before this render" positions.
+  useEffect(() => {
+    if (!listRef.current) return
+    const refresh = () => {
+      const m = new Map<string, number>()
+      for (const id of Object.keys(rowRefs.current)) {
+        const el = rowRefs.current[id]
+        if (el) m.set(id, el.getBoundingClientRect().top)
+      }
+      prevOffsetsRef.current = m
+    }
+    // Initial capture — the layout effect below runs first, but on
+    // mount `prevOffsetsRef` is empty, and by the time this effect
+    // runs the Card's expand animation is still in flight. Refresh
+    // once more here so the baseline covers the tail of that motion,
+    // and again through the ResizeObserver for each subsequent step.
+    refresh()
+    const ro = new ResizeObserver(refresh)
+    ro.observe(listRef.current)
+    for (const el of Object.values(rowRefs.current)) {
+      if (el) ro.observe(el)
+    }
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIds.join('|')])
 
   useLayoutEffect(() => {
     // Compare against last known order. If it's a genuine reorder (same
@@ -603,7 +642,7 @@ export function SegmentedPartitionEditor({
         hasFill={hasFill}
       />
 
-      <div className="flex flex-col gap-3">
+      <div ref={listRef} className="flex flex-col gap-3">
         {value.map((p, idx) => (
           // Key by partition id ONLY (not id+idx) so React reconciles by
           // identity across reorders — rows keep their DOM nodes across a
