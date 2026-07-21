@@ -239,8 +239,14 @@ export function parseYamlToDraft(yaml: string): InteractiveDraft {
       user = {
         name: asString(pick(rec, 'name', 'Name')),
         password: asString(pick(rec, 'password', 'Password')),
+        // Accept every casing the schema and older templates might use:
+        //   `hash_algo` (canonical schema key), `hashAlgo` (older UI
+        //   emit before the schema-matching fix), `HashAlgo` (Go
+        //   PascalCase from a marshaled ImageTemplate). Any of these
+        //   round-trip cleanly now that the writer emits `hash_algo`.
         hashAlgo:
-          asString(pick(rec, 'hashAlgo', 'HashAlgo'), 'sha512') === 'bcrypt'
+          asString(pick(rec, 'hash_algo', 'hashAlgo', 'HashAlgo'), 'sha512') ===
+          'bcrypt'
             ? 'bcrypt'
             : 'sha512',
         groups: asStringArray(pick(rec, 'groups', 'Groups')),
@@ -343,7 +349,13 @@ function ensureObj(obj: Record<string, unknown>, key: string): Record<string, un
 function singleUserFrom(u: UserConfig): Record<string, unknown> {
   const out: Record<string, unknown> = { name: u.name }
   if (u.password) out.password = u.password
-  if (u.hashAlgo) out.hashAlgo = u.hashAlgo
+  // The schema (internal/config/schema/os-image-template.schema.json) is
+  // inconsistent about casing here: most user fields are camelCase
+  // (passwordMaxAge, startupScript) but hash-algo is snake_case
+  // (`hash_algo`). Emitting camelCase `hashAlgo` trips
+  // additionalProperties:false and fails validation at build time. Match
+  // the schema exactly for this one key.
+  if (u.hashAlgo) out.hash_algo = u.hashAlgo
   if (u.groups && u.groups.length > 0) out.groups = u.groups
   if (u.sudo) out.sudo = u.sudo
   if (u.home) out.home = u.home
