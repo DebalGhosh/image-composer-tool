@@ -35,6 +35,7 @@ import { useStore, useToast, type InteractiveDraft, type UserConfig } from '../s
 import { api } from '../api/client'
 import type { ComposeRequest, PackageEntry } from '../api/types'
 import { Card } from './Card'
+import { Collapsible } from './Collapsible'
 import { Combobox, type ComboboxItem } from './Combobox'
 import {
   MultiCombobox,
@@ -1136,6 +1137,12 @@ function UserBlock({
   const enabled = user !== null
   const patch = (p: Partial<UserConfig>) =>
     onChange({ ...(user ?? DEFAULT_USER), ...p })
+  // While Collapsible is animating the exit, `user` has already flipped to
+  // null (the parent set it on checkbox uncheck). The fields still need
+  // something to render against for those ~260ms. Fall back to the last
+  // meaningful value or the DEFAULT_USER template so field inputs don't
+  // throw during the close animation.
+  const displayUser: UserConfig = user ?? DEFAULT_USER
   return (
     <div>
       <label
@@ -1152,9 +1159,9 @@ function UserBlock({
         />
         Enable a default user
       </label>
-      {enabled && user && (
+      <Collapsible open={enabled} className="mt-3">
         <div
-          className="mt-3 grid gap-4 rounded-md border p-4 md:grid-cols-2"
+          className="grid gap-4 rounded-md border p-4 md:grid-cols-2"
           style={{
             borderColor: 'var(--border-color)',
             background: 'var(--input-background)',
@@ -1170,7 +1177,7 @@ function UserBlock({
             </label>
             <TextInput
               id="i-user-name"
-              value={user.name}
+              value={displayUser.name}
               onChange={(e) => patch({ name: e.target.value })}
               placeholder="user"
             />
@@ -1186,7 +1193,7 @@ function UserBlock({
             <TextInput
               id="i-user-password"
               type="password"
-              value={user.password}
+              value={displayUser.password}
               onChange={(e) => patch({ password: e.target.value })}
               placeholder="(hashed on server)"
               autoComplete="new-password"
@@ -1202,7 +1209,7 @@ function UserBlock({
             </label>
             <Combobox
               ariaLabelledBy="i-user-hashalgo-label"
-              value={user.hashAlgo}
+              value={displayUser.hashAlgo}
               items={HASH_ALGO_ITEMS}
               placeholder="sha512"
               onChange={(v) =>
@@ -1220,7 +1227,7 @@ function UserBlock({
             </label>
             <TextInput
               id="i-user-groups"
-              value={user.groups.join(', ')}
+              value={displayUser.groups.join(', ')}
               onChange={(e) =>
                 patch({
                   groups: e.target.value
@@ -1242,7 +1249,7 @@ function UserBlock({
             </label>
             <TextInput
               id="i-user-home"
-              value={user.home}
+              value={displayUser.home}
               onChange={(e) => patch({ home: e.target.value })}
               placeholder="/home/user"
             />
@@ -1257,7 +1264,7 @@ function UserBlock({
             </label>
             <TextInput
               id="i-user-shell"
-              value={user.shell}
+              value={displayUser.shell}
               onChange={(e) => patch({ shell: e.target.value })}
               placeholder="/bin/bash"
             />
@@ -1268,14 +1275,14 @@ function UserBlock({
           >
             <input
               type="checkbox"
-              checked={user.sudo}
+              checked={displayUser.sudo}
               onChange={(e) => patch({ sudo: e.target.checked })}
               className="h-4 w-4 accent-[var(--classic-blue)] cursor-pointer"
             />
             Passwordless sudo
           </label>
         </div>
-      )}
+      </Collapsible>
     </div>
   )
 }
