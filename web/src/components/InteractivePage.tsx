@@ -1004,9 +1004,15 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
           style={{
             position: 'absolute',
             top: '50%',
-            // Nudge the button so its centre sits ON the divider line —
-            // half-width to the left of the right pane's inner edge.
-            right: `calc(${rightSizePct}% - 14px)`,
+            // Anchor the button so its centre tracks the divider line
+            // when the preview is expanded (`calc(N% - 14px)`), but
+            // clamp with `max(..., 8px)` so it can never slide beyond
+            // the viewport's right edge. When the preview collapses to
+            // 0%, `calc(0% - 14px)` would put the centre at -14 px and
+            // half the button off-screen; the 8-px floor pins the full
+            // button just inside the edge instead. Feels like the button
+            // "docks" to the side when the preview is hidden.
+            right: `max(calc(${rightSizePct}% - 14px), 8px)`,
             transform: 'translateY(-50%)',
             zIndex: 5,
             width: 28,
