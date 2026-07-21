@@ -330,17 +330,6 @@ function deepClone<T>(x: T): T {
   return JSON.parse(JSON.stringify(x)) as T
 }
 
-/** Ensure `obj[key]` is a plain object, replacing non-objects, and return it. */
-function ensureObj(obj: Record<string, unknown>, key: string): Record<string, unknown> {
-  const cur = obj[key]
-  if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
-    return cur as Record<string, unknown>
-  }
-  const next: Record<string, unknown> = {}
-  obj[key] = next
-  return next
-}
-
 /**
  * Serialize a single UserConfig back into the shape sigs.k8s.io/yaml + our
  * CoreV1 parser accept. Only non-empty fields are emitted so the diff on a
@@ -396,87 +385,199 @@ function partitionsToYaml(
   return out
 }
 
+/**
+ * Whitelist of the top-level keys the UserTemplate schema accepts. Every
+ * other key at the doc root is rejected via additionalProperties:false,
+ * and the merged doc we hydrate the draft from contains many Go-internal
+ * fields (`extends`, `PathList`, `BootloaderPkgList`, `DotFilePath`, …)
+ * plus the Go-marshaled PascalCase equivalents of every section
+ * (`Image`, `Target`, `Disk`, `SystemConfig`, …). Emitting those would
+ * fail validation at Jenkins build time. So we build a fresh output doc
+ * containing only the whitelisted keys and preserve the schema-known
+ * passthrough sections from the source when present.
+ */
+const ALLOWED_TOP_LEVEL_KEYS: readonly string[] = [
+  'extends',
+  'metadata',
+  'image',
+  'target',
+  'baseline',
+  'overlayPolicy',
+  'disk',
+  'systemConfig',
+  'sbomPackageMetadata',
+  'packageRepositories',
+]
+
+/**
+ * Map the Go-side PascalCase package-repository shape back to the
+ * camelCase keys the UserTemplate schema requires. Anything not on the
+ * schema (`id`, `preseeds`, …) is dropped. Only non-empty values are
+ * emitted so `additionalProperties:false` doesn't reject a stray "".
+ */
+function repoFromAny(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  // Field-by-field remap: preferred camelCase first, then Go PascalCase
+  // fallbacks. Empty strings and null/undefined are omitted.
+  const takeStr = (dst: string, ...keys: string[]) => {
+    for (const k of keys) {
+      const v = r[k]
+      if (typeof v === 'string' && v.length > 0) {
+        out[dst] = v
+        return
+      }
+    }
+  }
+  const takeAny = (dst: string, ...keys: string[]) => {
+    for (const k of keys) {
+      const v = r[k]
+      if (v === null || v === undefined) continue
+      if (Array.isArray(v) && v.length === 0) continue
+      out[dst] = v
+      return
+    }
+  }
+  takeStr('codename', 'codename', 'Codename')
+  takeStr('url', 'url', 'URL', 'Url')
+  takeStr('path', 'path', 'Path')
+  takeAny('packages', 'packages', 'Packages')
+  takeStr('pkey', 'pkey', 'PKey', 'Pkey')
+  takeAny('pkeys', 'pkeys', 'PKeys', 'Pkeys')
+  takeStr('component', 'component', 'Component')
+  takeAny('allowPackages', 'allowPackages', 'AllowPackages')
+  // priority: numeric — 0 is a legal minimum, so only omit when unset.
+  {
+    const v = r.priority ?? r.Priority
+    if (typeof v === 'number' && Number.isFinite(v)) out.priority = v
+  }
+  // insecureSkipVerify: emit only when true (default is false anyway).
+  {
+    const v = r.insecureSkipVerify ?? r.InsecureSkipVerify
+    if (v === true) out.insecureSkipVerify = true
+  }
+  return out
+}
+
+/**
+ * Filter the current user object to the fields the Users schema allows.
+ * Everything else (Go-side `PasswordMaxAge: 0`, empty `StartupScript`,
+ * lingering `HashAlgo` casing) has been handled elsewhere in the
+ * serialization, but this belt-and-braces filter guarantees no unknown
+ * top-level keys ever land on a user entry.
+ */
+const ALLOWED_USER_KEYS: readonly string[] = [
+  'name',
+  'password',
+  'hash_algo',
+  'passwordMaxAge',
+  'startupScript',
+  'groups',
+  'sudo',
+  'home',
+  'shell',
+]
+
+function whitelistKeys(
+  obj: Record<string, unknown>,
+  allowed: readonly string[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of allowed) {
+    if (obj[k] !== undefined) out[k] = obj[k]
+  }
+  return out
+}
+
 export function applyOverrides(draft: InteractiveDraft): string {
-  // Deep-clone so callers can keep using the original baseDoc — YAML.stringify
-  // is fine with either mutated or fresh objects, but leaving baseDoc alone
-  // means subsequent applyOverrides calls remain idempotent.
-  const doc: Record<string, unknown> =
+  // Snapshot of the source doc — needed to preserve `extends`, `metadata`,
+  // `baseline`, and `overlayPolicy` (schema-allowed passthrough fields
+  // that the Interactive form doesn't edit but the seed may have set).
+  const src: Record<string, unknown> =
     draft.baseDoc && typeof draft.baseDoc === 'object' && !Array.isArray(draft.baseDoc)
       ? (deepClone(draft.baseDoc) as Record<string, unknown>)
       : {}
 
+  // Build the output from scratch so no Go-marshaled fields leak through.
+  // Every section is populated fresh from the draft below.
+  const doc: Record<string, unknown> = {}
+
+  // Passthrough sections that the Interactive form doesn't touch. Preserve
+  // them from the merged seed doc if present, drop everything else.
+  for (const k of ['extends', 'metadata', 'baseline', 'overlayPolicy'] as const) {
+    // Accept both camelCase (already-mapped) and PascalCase (raw Go marshal).
+    const val =
+      (src as Record<string, unknown>)[k] ??
+      (src as Record<string, unknown>)[k.charAt(0).toUpperCase() + k.slice(1)]
+    if (val !== undefined && val !== null && val !== '') {
+      doc[k] = val
+    }
+  }
+
   // image
-  const image = ensureObj(doc, 'image')
-  image.name = draft.imageName
-  image.version = draft.imageVersion
-  // Drop any leftover PascalCase keys so we emit a clean camelCase document.
-  delete image.Name
-  delete image.Version
+  doc.image = {
+    name: draft.imageName,
+    version: draft.imageVersion,
+  }
 
   // target
-  const target = ensureObj(doc, 'target')
-  target.os = draft.target.os
-  target.dist = draft.target.dist
-  target.arch = draft.target.arch
-  target.imageType = draft.target.imageType
-  delete target.OS
-  delete target.Os
-  delete target.Dist
-  delete target.Arch
-  delete target.ImageType
+  doc.target = {
+    os: draft.target.os,
+    dist: draft.target.dist,
+    arch: draft.target.arch,
+    imageType: draft.target.imageType,
+  }
 
   // disk
-  const disk = ensureObj(doc, 'disk')
-  disk.size = formatGiB(draft.disk.sizeGiB)
-  disk.partitionTableType = draft.disk.partitionTableType
   const diskMiB = Math.max(1, Math.round(draft.disk.sizeGiB * 1024))
-  disk.partitions = partitionsToYaml(draft.disk.partitions, diskMiB)
-  delete disk.Size
-  delete disk.PartitionTableType
-  delete disk.Partitions
-
-  // systemConfig
-  const sysCfg = ensureObj(doc, 'systemConfig')
-  // The Name mirrors imageName when unset — matches how templates on disk
-  // (which lean on Cocoon's ${...} substitution) are typically authored.
-  sysCfg.name =
-    asString(sysCfg.name) || asString(sysCfg.Name) || draft.imageName
-  if (draft.hostname) sysCfg.hostname = draft.hostname
-  delete sysCfg.Name
-  delete sysCfg.HostName
-  delete sysCfg.Hostname
-
-  const kernel = ensureObj(sysCfg, 'kernel')
-  kernel.version = draft.kernel.version
-  kernel.cmdline = draft.kernel.cmdline
-  kernel.packages = draft.kernel.packages
-  kernel.enableExtraModules = draft.kernel.enableExtraModules
-  kernel.uki = draft.kernel.uki
-  delete kernel.Version
-  delete kernel.Cmdline
-  delete kernel.Packages
-  delete kernel.EnableExtraModules
-  delete kernel.Uki
-  delete kernel.UKI
-  delete sysCfg.Kernel
-
-  sysCfg.packages = draft.packages
-  delete sysCfg.Packages
-
-  if (draft.user) {
-    sysCfg.users = [singleUserFrom(draft.user)]
-  } else if (sysCfg.Users !== undefined && sysCfg.users === undefined) {
-    // Preserve PascalCase-only user block by remapping it.
-    sysCfg.users = sysCfg.Users
+  doc.disk = {
+    size: formatGiB(draft.disk.sizeGiB),
+    partitionTableType: draft.disk.partitionTableType,
+    partitions: partitionsToYaml(draft.disk.partitions, diskMiB),
   }
-  delete sysCfg.Users
 
-  sysCfg.configurations = draft.inheritedConfigurations
-  delete sysCfg.Configurations
+  // systemConfig — assemble child sections then whitelist to prevent
+  // any unknown keys from sneaking through.
+  const sysCfg: Record<string, unknown> = {
+    name: draft.imageName,
+  }
+  if (draft.hostname) sysCfg.hostname = draft.hostname
+  sysCfg.kernel = {
+    version: draft.kernel.version,
+    cmdline: draft.kernel.cmdline,
+    packages: draft.kernel.packages,
+    enableExtraModules: draft.kernel.enableExtraModules,
+    uki: draft.kernel.uki,
+  }
+  sysCfg.packages = draft.packages
+  if (draft.user) {
+    sysCfg.users = [
+      whitelistKeys(singleUserFrom(draft.user), ALLOWED_USER_KEYS),
+    ]
+  }
+  if (draft.inheritedConfigurations.length > 0) {
+    sysCfg.configurations = draft.inheritedConfigurations
+  }
+  doc.systemConfig = sysCfg
 
-  // packageRepositories at the top level.
-  doc.packageRepositories = draft.inheritedRepositories
-  delete doc.PackageRepositories
+  // packageRepositories: whitelist each entry to schema keys, drop the
+  // Go-only IDs and empty-string placeholders.
+  if (draft.inheritedRepositories.length > 0) {
+    const mapped = (draft.inheritedRepositories as unknown[])
+      .map((r) => repoFromAny(r))
+      .filter((x): x is Record<string, unknown> => x !== null && Object.keys(x).length > 0)
+    if (mapped.length > 0) doc.packageRepositories = mapped
+  }
 
-  return YAML.stringify(doc)
+  // Belt-and-braces: ensure only whitelisted top-level keys land in the
+  // output. If a future draft field grows a new top-level section, this
+  // fails fast and gives us a chance to update ALLOWED_TOP_LEVEL_KEYS
+  // rather than shipping a schema-invalid template silently.
+  const final: Record<string, unknown> = {}
+  for (const k of ALLOWED_TOP_LEVEL_KEYS) {
+    if (doc[k] !== undefined) final[k] = doc[k]
+  }
+
+  return YAML.stringify(final)
 }
