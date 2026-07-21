@@ -398,7 +398,18 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
     <div className="interactive-page-shell">
       <PanelGroup direction="horizontal" className="min-h-0 flex-1">
         <Panel defaultSize={complete ? 55 : 100} minSize={35}>
-          <div className="h-full overflow-y-auto p-6">
+          {/*
+           * Top padding lives on the inner content, NOT on the scroll
+           * container. If it were on the scroller, scrolled content
+           * would slide underneath the padding strip (browsers don't
+           * treat overflow-container padding as opaque), showing a
+           * bleed-through gap above the sticky accordion header. With
+           * padding on the inner div, the scrollable content ends at
+           * the container's true top edge and sticky headers pin
+           * flush against the pane's visible top.
+           */}
+          <div className="h-full overflow-y-auto">
+            <div className="px-6 pt-6 pb-6">
             <h1
               className="mb-1 text-2xl font-bold"
               style={{ color: 'var(--title-text)' }}
@@ -835,6 +846,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                 </p>
               </Card>
             )}
+            </div>
           </div>
         </Panel>
 
