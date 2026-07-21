@@ -204,7 +204,12 @@ export function Card({
         <button
           type="button"
           className={
-            'sticky top-0 z-10 flex w-full cursor-pointer items-center justify-between gap-3 rounded-t-lg px-5 py-3.5 text-left select-none' +
+            // z-20 (not z-10) so the sticky header wins over anything a
+            // card body renders with `position: relative; z-10` — the
+            // Segmented radios' pill+labels are the concrete example, but
+            // this also covers any future in-body absolutely-positioned
+            // affordances that need to layer over their own siblings.
+            'sticky top-0 z-20 flex w-full cursor-pointer items-center justify-between gap-3 rounded-t-lg px-5 py-3.5 text-left select-none' +
             (open ? ' border-b' : '')
           }
           style={{
