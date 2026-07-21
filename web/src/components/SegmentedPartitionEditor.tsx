@@ -507,18 +507,7 @@ export function SegmentedPartitionEditor({
   const prevOffsetsRef = useRef<Map<string, number>>(new Map())
   const prevOrderRef = useRef<string[]>([])
 
-  // Capture positions on every render BEFORE React commits, keyed by id.
-  // Using a plain assignment (not an effect) so we always have the last
-  // observed layout snapshot when the next layout effect runs.
   const currentIds = value.map((p) => p.id)
-  const captureOffsets = () => {
-    const map = new Map<string, number>()
-    for (const id of currentIds) {
-      const el = rowRefs.current[id]
-      if (el) map.set(id, el.getBoundingClientRect().top)
-    }
-    return map
-  }
 
   useLayoutEffect(() => {
     // Compare against last known order. If it's a genuine reorder (same
@@ -532,30 +521,46 @@ export function SegmentedPartitionEditor({
       sameSet &&
       prevIds.some((id, i) => currentIds[i] !== id)
 
+    // Capture the NATURAL post-commit position of every row exactly once,
+    // BEFORE we apply any transforms below. Reusing this same map to seed
+    // `prevOffsetsRef` for the next render is critical — the earlier
+    // approach re-captured AFTER transforms were applied, which meant the
+    // "old" positions on the next swap were the visually-shifted values,
+    // making every non-moving row look like it had moved by ±(dy). That's
+    // why previously a single swap animated the whole list.
+    const newOffsets = new Map<string, number>()
+    for (const id of currentIds) {
+      const el = rowRefs.current[id]
+      if (el) newOffsets.set(id, el.getBoundingClientRect().top)
+    }
+
     if (reordered) {
-      const newOffsets = captureOffsets()
+      // 1 px threshold (rather than 0.5) filters subpixel reflow jitter —
+      // font-metric rounding and Blink's compositor promotion can shift
+      // non-moving rows by fractions of a pixel between renders. The
+      // real swap deltas are always dozens of pixels, so 1 px is safe.
+      const MIN_DELTA = 1
       for (const [id, oldTop] of prevOffsetsRef.current) {
         const el = rowRefs.current[id]
         const newTop = newOffsets.get(id)
         if (!el || newTop === undefined) continue
         const dy = oldTop - newTop
-        if (Math.abs(dy) < 0.5) continue
-        // Place the row at its old visual position with no transition.
+        if (Math.abs(dy) < MIN_DELTA) continue
         el.style.transition = 'none'
         el.style.transform = `translateY(${dy}px)`
-        // Force a synchronous style flush so the browser doesn't fold
-        // the transform out with the next line's reset. Reading
-        // offsetHeight is the standard trick.
+        // Force a synchronous style flush so the browser paints the
+        // first-frame transform before we schedule the transition.
         void el.offsetHeight
-        // Now animate back to 0.
         el.style.transition =
           'transform 260ms cubic-bezier(0.22, 0.7, 0.32, 1)'
         el.style.transform = 'translateY(0)'
       }
     }
 
-    // Snapshot the current post-commit state for the next render.
-    prevOffsetsRef.current = captureOffsets()
+    // Seed the next render with the CLEAN (pre-transform) natural
+    // positions we captured above — do NOT re-read from the DOM after
+    // the transforms were applied in the loop above.
+    prevOffsetsRef.current = newOffsets
     prevOrderRef.current = currentIds.slice()
     // Depend on currentIds joined so the effect only runs when the id
     // sequence actually changes — not on every keystroke inside a row.
@@ -612,12 +617,13 @@ export function SegmentedPartitionEditor({
             }}
             style={{
               // Solid background so mid-animation rows never render as
-              // see-through over their sibling. `willChange: transform`
-              // hints the browser to promote to its own compositor layer
-              // during the animation, avoiding paint bleed between rows.
+              // see-through over their sibling. Deliberately no
+              // `willChange: transform` here — promoting every row to
+              // its own compositor layer introduced subpixel drift that
+              // tripped the FLIP delta threshold on rows that weren't
+              // supposed to move.
               background: 'var(--section-background)',
               borderRadius: 8,
-              willChange: 'transform',
             }}
           >
             <PartitionRow
