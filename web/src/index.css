@@ -156,3 +156,79 @@ h3 {
   width: 100vw;
   height: 100vh;
 }
+
+/* -------------------------------------------------------------------------
+ * Slimline scrollbars — universal.
+ *
+ * The default OS scrollbars ship with a coloured track (light grey or nearly-
+ * white in dark themes) and a pair of triangular step arrows at the ends of
+ * every scroll axis. Both are visually loud and clash with the app's clean
+ * card / editor surfaces. Suppress them everywhere by:
+ *
+ *   - WebKit/Blink (Chrome, Edge, Safari): style ::-webkit-scrollbar and its
+ *     -track / -thumb / -button pseudo-elements. `-button` set to
+ *     `display: none` drops the arrow caps. Track fades to transparent so
+ *     only the thumb is visible against the underlying surface.
+ *
+ *   - Firefox: `scrollbar-width: thin` slims the default track/thumb, and
+ *     `scrollbar-color: <thumb> transparent` mirrors the same treatment
+ *     without a distinct track colour. Firefox doesn't render step arrows
+ *     for its `thin` scrollbar, so no extra work is needed there.
+ *
+ * `*` selector so this applies to every scrollable element in the app
+ * including CodeMirror's `.cm-scroller`, the left-pane scroller in the
+ * Interactive tab, terminal panes, and dropdown lists.
+ * ------------------------------------------------------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+/* WebKit / Blink family — full pseudo-element set. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+::-webkit-scrollbar-thumb {
+  /* Rounded pill in the muted border tone; slightly darker on hover so
+   * it still reads as interactive without a bright track underneath. */
+  background: var(--border-color);
+  border-radius: 9999px;
+  /* Padding via a transparent border so the thumb looks slimmer than
+   * the 10 px reserved space, matching macOS/iOS scrollbars. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-color);
+  background-clip: padding-box;
+}
+:where(.dark) ::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+:where(.dark) ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.32);
+  background-clip: padding-box;
+}
+/* Kill the step-arrow buttons at both ends of every axis. */
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-button:vertical:start:decrement,
+::-webkit-scrollbar-button:vertical:end:increment,
+::-webkit-scrollbar-button:horizontal:start:decrement,
+::-webkit-scrollbar-button:horizontal:end:increment {
+  display: none;
+  width: 0;
+  height: 0;
+}
