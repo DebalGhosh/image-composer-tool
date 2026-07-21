@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import type { Manifest, Combination } from './api/types'
 
 // --- Theme bootstrap ---------------------------------------------------------
@@ -212,8 +213,16 @@ const emptySelection: Selection = {
   imageType: '',
 }
 
-export const useStore = create<AppState>((set) => ({
-  manifest: null,
+// Persistence key + version. Bump `version` when the shape of the persisted
+// slice changes incompatibly — Zustand will drop the stale blob rather than
+// try to load it into the new shape.
+const PERSIST_KEY = 'ict.store'
+const PERSIST_VERSION = 1
+
+export const useStore = create<AppState>()(
+  persist(
+    (set) => ({
+      manifest: null,
   selection: emptySelection,
   advancedYaml: '',
   advancedSeedPick: '',
@@ -285,7 +294,25 @@ export const useStore = create<AppState>((set) => ({
       }
       return { selection }
     }),
-}))
+}),
+    {
+      name: PERSIST_KEY,
+      version: PERSIST_VERSION,
+      storage: createJSONStorage(() => localStorage),
+      // Only persist the fields the user would expect to survive a reload.
+      // Manifest is refetched at boot so persisting it would just delay the
+      // first paint with stale data. Theme is already persisted independently
+      // under `ict.theme`. Toasts and busy-flags are ephemeral by design.
+      partialize: (state) => ({
+        interactiveDraft: state.interactiveDraft,
+        interactiveSeedPick: state.interactiveSeedPick,
+        advancedYaml: state.advancedYaml,
+        advancedSeedPick: state.advancedSeedPick,
+        selection: state.selection,
+      }),
+    },
+  ),
+)
 
 // --- Derived cascading option helpers (pure functions over the manifest) ---
 
