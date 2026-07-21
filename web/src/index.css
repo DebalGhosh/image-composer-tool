@@ -179,25 +179,38 @@ h3 {
  * including CodeMirror's `.cm-scroller`, the left-pane scroller in the
  * Interactive tab, terminal panes, and dropdown lists.
  * ------------------------------------------------------------------------- */
+/* Custom properties that cascade into the ::-webkit-scrollbar pseudo-
+ * elements. Because CSS variables inherit through the pseudo-tree, we can
+ * drive the scrollbar's appearance from state on the real container
+ * (:hover) — which is otherwise impossible, since combinators can't
+ * target pseudo-elements. */
 * {
+  --sb-thumb: var(--border-color);
+  --sb-thumb-hover: var(--muted-color);
+  --sb-pad: 3px;                    /* idle: 4 px visible thumb */
   scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
+  scrollbar-color: var(--sb-thumb) transparent;
 }
 .dark * {
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  --sb-thumb: rgba(255, 255, 255, 0.18);
+  --sb-thumb-hover: rgba(255, 255, 255, 0.42);
+}
+
+/* On container hover, shrink the thumb's transparent border → wider thumb
+ * (8 px visible) and swap to the brighter thumb color. Both properties
+ * transition on the pseudo-element rule below. */
+*:hover {
+  --sb-pad: 1px;                    /* hover: 8 px visible thumb */
+  --sb-thumb: var(--sb-thumb-hover);
 }
 
 /* WebKit / Blink family — full pseudo-element set.
  *
- * Sizing trick: the ::-webkit-scrollbar itself reserves 10 px of layout
- * space — enough for a wide thumb to fit into on hover — but the visual
- * thumb width is controlled by a transparent `border` on the thumb
- * (background-clip: padding-box makes the border truly hollow). So the
- * VISIBLE thumb is `width − 2×border`, and animating the border width
- * smoothly shrinks/grows the pill without reflowing the container.
- *
- *   default border 3px  → visible thumb 4 px  (thin idle state)
- *   hover   border 1px  → visible thumb 8 px  (grabbable state)
+ * Sizing trick: the ::-webkit-scrollbar reserves 10 px of layout space;
+ * the visible thumb width equals `width − 2×border`, where the border is
+ * transparent (background-clip: padding-box makes it truly hollow). So
+ * animating border-width — driven here via the cascading --sb-pad —
+ * smoothly grows/shrinks the pill without triggering a container reflow.
  */
 ::-webkit-scrollbar {
   width: 10px;
@@ -212,39 +225,33 @@ h3 {
   box-shadow: none;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 9999px;
-  border: 3px solid transparent;
+  background: var(--sb-thumb);
   background-clip: padding-box;
+  border-radius: 9999px;
+  border: var(--sb-pad) solid transparent;
   transition:
     border-width 160ms cubic-bezier(0.22, 0.7, 0.32, 1),
     background-color 160ms ease;
 }
-:where(.dark) ::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.18);
-  background-clip: padding-box;
-}
-
-/* Fatten the thumb when the user hovers the SCROLL CONTAINER (not just the
- * thumb itself) — so the transition is inviting rather than requiring
- * precision-hover on a 4 px target. Also brightens the fill for grab-affordance. */
-*:hover > ::-webkit-scrollbar-thumb,
-*:hover::-webkit-scrollbar-thumb,
+/* Thumb-precise hover is redundant with the container hover but we keep
+ * it in case a browser doesn't propagate :hover state through the parent
+ * chain for scrollable descendants (rare, but observed on nested overflow
+ * regions). */
 ::-webkit-scrollbar-thumb:hover {
-  border-width: 1px;
-  background-color: var(--muted-color);
-  background-clip: padding-box;
-}
-:where(.dark) *:hover > ::-webkit-scrollbar-thumb,
-:where(.dark) *:hover::-webkit-scrollbar-thumb,
-:where(.dark) ::-webkit-scrollbar-thumb:hover {
-  border-width: 1px;
-  background-color: rgba(255, 255, 255, 0.42);
+  border: 1px solid transparent;
+  background: var(--sb-thumb-hover);
   background-clip: padding-box;
 }
 
-/* Kill the step-arrow buttons at both ends of every axis. */
-::-webkit-scrollbar-button,
+/* Kill the step-arrow buttons at both ends of every axis. Two rules —
+ * the generic `::-webkit-scrollbar-button` catches most cases, but Blink
+ * still lays out zero-height buttons unless we also silence the specific
+ * decrement/increment tracks. */
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
 ::-webkit-scrollbar-button:vertical:start:decrement,
 ::-webkit-scrollbar-button:vertical:end:increment,
 ::-webkit-scrollbar-button:horizontal:start:decrement,
