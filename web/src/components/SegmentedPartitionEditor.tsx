@@ -504,105 +504,64 @@ export function SegmentedPartitionEditor({
    * order (later rows paint on top). No transparency, no ghosting.
    */
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const prevOffsetsRef = useRef<Map<string, number>>(new Map())
-  const prevOrderRef = useRef<string[]>([])
-  const listRef = useRef<HTMLDivElement | null>(null)
+  // Positions captured synchronously in the user-triggered move handler,
+  // consumed by the useLayoutEffect right after React commits the swap.
+  // Only populated when a move is genuinely requested — so the FLIP loop
+  // below never runs for renders triggered by, e.g., typing a partition
+  // size, resizing the disk slider, or the Card's expand animation.
+  const pendingFlipRef = useRef<Map<string, number> | null>(null)
 
   const currentIds = value.map((p) => p.id)
 
-  // Keep `prevOffsetsRef` in lockstep with the actual DOM positions
-  // whenever layout shifts for reasons OTHER than a reorder — Card
-  // expand/collapse animations, viewport resizes, the parent panel
-  // resizing, fonts loading. Without this, the very first user-driven
-  // reorder computes `dy` against a stale baseline captured while the
-  // Card was still mid-expand animation, and every row appears to have
-  // "moved" by that leftover expand delta. The FLIP effect below then
-  // animates the whole list.
-  //
-  // The ResizeObserver fires on any bounding-box change of the list
-  // container OR any of the individual rows; the callback simply
-  // re-captures each row's top so the next reorder computes against
-  // truthful "just before this render" positions.
-  useEffect(() => {
-    if (!listRef.current) return
-    const refresh = () => {
-      const m = new Map<string, number>()
-      for (const id of Object.keys(rowRefs.current)) {
-        const el = rowRefs.current[id]
-        if (el) m.set(id, el.getBoundingClientRect().top)
-      }
-      prevOffsetsRef.current = m
-    }
-    // Initial capture — the layout effect below runs first, but on
-    // mount `prevOffsetsRef` is empty, and by the time this effect
-    // runs the Card's expand animation is still in flight. Refresh
-    // once more here so the baseline covers the tail of that motion,
-    // and again through the ResizeObserver for each subsequent step.
-    refresh()
-    const ro = new ResizeObserver(refresh)
-    ro.observe(listRef.current)
-    for (const el of Object.values(rowRefs.current)) {
-      if (el) ro.observe(el)
-    }
-    return () => ro.disconnect()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIds.join('|')])
-
-  useLayoutEffect(() => {
-    // Compare against last known order. If it's a genuine reorder (same
-    // set of ids, different sequence), run the FLIP; on add/remove we
-    // let React's own mount/unmount transitions handle it.
-    const prevIds = prevOrderRef.current
-    const sameSet =
-      prevIds.length === currentIds.length &&
-      prevIds.every((id) => currentIds.includes(id))
-    const reordered =
-      sameSet &&
-      prevIds.some((id, i) => currentIds[i] !== id)
-
-    // Capture the NATURAL post-commit position of every row exactly once,
-    // BEFORE we apply any transforms below. Reusing this same map to seed
-    // `prevOffsetsRef` for the next render is critical — the earlier
-    // approach re-captured AFTER transforms were applied, which meant the
-    // "old" positions on the next swap were the visually-shifted values,
-    // making every non-moving row look like it had moved by ±(dy). That's
-    // why previously a single swap animated the whole list.
-    const newOffsets = new Map<string, number>()
+  /**
+   * Wrap `swap(...)` so we snapshot every row's current DOM top RIGHT
+   * BEFORE the state update. This is the classic React FLIP pattern:
+   * capture "First" positions from the DOM as it stands, dispatch the
+   * state change, then in useLayoutEffect apply `translateY(dy)` +
+   * transition-back-to-zero using the captured baseline.
+   *
+   * Doing the capture here instead of in a mount-time effect avoids
+   * every source of baseline contamination we hit earlier: the Card's
+   * initial expand animation, transforms applied by a previous FLIP,
+   * viewport resizes, panel drags — none of them touch pendingFlipRef.
+   * Only a real click captures, so only a real click animates.
+   */
+  const swapWithFlip = (a: number, b: number) => {
+    const snap = new Map<string, number>()
     for (const id of currentIds) {
       const el = rowRefs.current[id]
-      if (el) newOffsets.set(id, el.getBoundingClientRect().top)
+      if (el) snap.set(id, el.getBoundingClientRect().top)
     }
+    pendingFlipRef.current = snap
+    swap(a, b)
+  }
 
-    if (reordered) {
-      // 1 px threshold (rather than 0.5) filters subpixel reflow jitter —
-      // font-metric rounding and Blink's compositor promotion can shift
-      // non-moving rows by fractions of a pixel between renders. The
-      // real swap deltas are always dozens of pixels, so 1 px is safe.
-      const MIN_DELTA = 1
-      for (const [id, oldTop] of prevOffsetsRef.current) {
-        const el = rowRefs.current[id]
-        const newTop = newOffsets.get(id)
-        if (!el || newTop === undefined) continue
-        const dy = oldTop - newTop
-        if (Math.abs(dy) < MIN_DELTA) continue
-        el.style.transition = 'none'
-        el.style.transform = `translateY(${dy}px)`
-        // Force a synchronous style flush so the browser paints the
-        // first-frame transform before we schedule the transition.
-        void el.offsetHeight
-        el.style.transition =
-          'transform 260ms cubic-bezier(0.22, 0.7, 0.32, 1)'
-        el.style.transform = 'translateY(0)'
-      }
+  useLayoutEffect(() => {
+    const oldOffsets = pendingFlipRef.current
+    // If there's no pending FLIP request, this render was triggered by
+    // something OTHER than a user-clicked reorder (typing, size drag,
+    // add/remove partition, Card expand tail). Do nothing.
+    if (!oldOffsets) return
+    pendingFlipRef.current = null
+
+    // 1 px threshold filters subpixel reflow jitter — non-moving rows
+    // can shift 0.6-0.9 px between renders due to font-metric rounding.
+    const MIN_DELTA = 1
+    for (const [id, oldTop] of oldOffsets) {
+      const el = rowRefs.current[id]
+      if (!el) continue
+      const newTop = el.getBoundingClientRect().top
+      const dy = oldTop - newTop
+      if (Math.abs(dy) < MIN_DELTA) continue
+      el.style.transition = 'none'
+      el.style.transform = `translateY(${dy}px)`
+      // Force a synchronous style flush so the browser paints the
+      // first-frame transform before we schedule the transition.
+      void el.offsetHeight
+      el.style.transition =
+        'transform 260ms cubic-bezier(0.22, 0.7, 0.32, 1)'
+      el.style.transform = 'translateY(0)'
     }
-
-    // Seed the next render with the CLEAN (pre-transform) natural
-    // positions we captured above — do NOT re-read from the DOM after
-    // the transforms were applied in the loop above.
-    prevOffsetsRef.current = newOffsets
-    prevOrderRef.current = currentIds.slice()
-    // Depend on currentIds joined so the effect only runs when the id
-    // sequence actually changes — not on every keystroke inside a row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIds.join('|')])
 
@@ -673,9 +632,11 @@ export function SegmentedPartitionEditor({
               usedByOthersMiB={usedMiB - (p.fillRemaining ? 0 : p.sizeMiB)}
               onChange={(patch) => updateAt(idx, patch)}
               onDelete={() => removeAt(idx)}
-              onMoveUp={idx > 0 ? () => swap(idx, idx - 1) : undefined}
+              onMoveUp={idx > 0 ? () => swapWithFlip(idx, idx - 1) : undefined}
               onMoveDown={
-                idx < value.length - 1 ? () => swap(idx, idx + 1) : undefined
+                idx < value.length - 1
+                  ? () => swapWithFlip(idx, idx + 1)
+                  : undefined
               }
               onToggleFill={(on) => setFillRemaining(idx, on)}
             />
