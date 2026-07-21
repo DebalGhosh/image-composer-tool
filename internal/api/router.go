@@ -18,6 +18,7 @@ func (s *Server) routes() *http.ServeMux {
 	// Read path
 	mux.HandleFunc("GET /api/v1/manifest", s.handleGetManifest)
 	mux.HandleFunc("POST /api/v1/templates/compose", s.handleCompose)
+	mux.HandleFunc("GET /api/v1/packages", s.handleSearchPackages)
 
 	// Build path (implemented in builds.go)
 	mux.HandleFunc("POST /api/v1/builds", s.handleStartBuild)

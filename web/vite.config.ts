@@ -9,10 +9,12 @@ export default defineConfig({
     // Listen on all interfaces so a remote browser (e.g. over SSH) can reach the
     // dev server at the host's IP without a tunnel. Harmless for local use.
     host: true,
-    // Proxy API calls to the Go backend during development.
+    // Proxy API calls to the Go backend during development. VITE_API_TARGET
+    // lets a parallel test instance point at a non-default port (e.g. 8081
+    // when the primary Go server on 8080 must stay untouched).
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.VITE_API_TARGET || 'http://localhost:8080',
         changeOrigin: true,
       },
     },

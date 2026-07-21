@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
+	"sigs.k8s.io/yaml"
 )
 
 // handleGetManifest returns the full configuration manifest.
@@ -118,9 +119,24 @@ func (s *Server) handleCompose(w http.ResponseWriter, r *http.Request) {
 	}
 	summary := buildComposeSummary(req, merged)
 
+	// The Interactive tab needs the flattened MERGED template (extends: chains
+	// resolved, defaults folded in) so populating form widgets from the seed
+	// doesn't silently drop inherited fields. Basic/Advanced clients call
+	// /templates/compose without ?form and get the raw seed YAML as before.
+	yamlText := string(raw)
+	if r.URL.Query().Get("form") == "merged" {
+		mergedBytes, mErr := yaml.Marshal(merged)
+		if mErr != nil {
+			writeError(w, http.StatusInternalServerError, "TEMPLATE_MARSHAL",
+				"failed to marshal merged template: "+mErr.Error())
+			return
+		}
+		yamlText = string(mergedBytes)
+	}
+
 	writeJSON(w, http.StatusOK, composeResponse{
 		Template: tmpl,
-		YAML:     string(raw),
+		YAML:     yamlText,
 		Summary:  summary,
 	})
 }

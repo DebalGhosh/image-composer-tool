@@ -12,6 +12,7 @@ import CodeMirror, {
   EditorView,
   keymap,
   Prec,
+  type Extension,
   type ReactCodeMirrorRef,
 } from '@uiw/react-codemirror'
 import { yaml } from '@codemirror/lang-yaml'
@@ -32,6 +33,12 @@ export interface YamlEditorProps {
   labelledBy?: string
   /** Extra Tailwind classes for the outer wrapper (border, focus ring, etc.). */
   className?: string
+  /** Additional CodeMirror extensions appended to the built-in set (yaml,
+   * tab-handler, base theme). Used by callers who want to inject
+   * decorations, StateFields, or extra themes without forking this
+   * component. Memoise the array upstream so extensions don't re-register
+   * on every parent render. */
+  extraExtensions?: Extension[]
 }
 
 // Custom Tab handler: insert two spaces at the caret rather than a literal tab
@@ -172,6 +179,7 @@ export function YamlEditor({
   id,
   labelledBy,
   className,
+  extraExtensions,
 }: YamlEditorProps) {
   const themeMode = useStore((s) => s.theme)
   const cmRef = useRef<ReactCodeMirrorRef | null>(null)
@@ -214,8 +222,11 @@ export function YamlEditor({
         '.cm-content': { padding: '8px 0' },
         '.cm-gutters': { userSelect: 'none' },
       }),
+      // Caller-provided extensions (line-diff decorations, custom themes)
+      // are appended last so they can override earlier registrations if needed.
+      ...(extraExtensions ?? []),
     ],
-    [],
+    [extraExtensions],
   )
 
   const basicSetup = useMemo(

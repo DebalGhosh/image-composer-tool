@@ -6,6 +6,8 @@ import type {
   ComposeResponse,
   BuildAccepted,
   BuildDetails,
+  PackageSearchRequest,
+  PackageSearchResponse,
 } from './types'
 
 const BASE = '/api/v1'
@@ -36,6 +38,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(req),
     }),
+
+  // Merged-form compose: same request/response shape as compose(), but the
+  // server returns the fully-merged YAML (base template + package overlays)
+  // instead of the raw base. Used by the Advanced tab's package picker.
+  composeMerged: (req: ComposeRequest) =>
+    jsonFetch<ComposeResponse>('/templates/compose?form=merged', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+
+  // Package search across the OS's configured repositories. `arch` defaults to
+  // amd64; empty `q` returns a name-sorted listing (server caps at `limit`,
+  // default 50 when omitted).
+  searchPackages: (req: PackageSearchRequest) => {
+    const arch = req.arch && req.arch.length > 0 ? req.arch : 'amd64'
+    const params = new URLSearchParams({ os: req.os, arch })
+    if (req.q && req.q.length > 0) params.set('q', req.q)
+    if (req.limit !== undefined && req.limit !== null)
+      params.set('limit', String(req.limit))
+    return jsonFetch<PackageSearchResponse>(`/packages?${params.toString()}`)
+  },
 
   // Fan a build out to a random idle worker in the Jenkins farm. Server picks
   // the worker (free-first, random fallback), triggers via buildWithParameters

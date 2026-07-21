@@ -119,3 +119,28 @@ export interface BuildComplete {
   artifacts?: Artifact[]
   message?: string
 }
+
+export interface PackageSearchRequest {
+  os: string
+  arch?: string
+  q?: string
+  limit?: number
+}
+
+export interface PackageEntry {
+  name: string
+  version: string
+  description: string
+  arch: string
+  section: string
+  repository: string
+  os: string
+  type: string
+  provides?: string[]
+}
+
+export interface PackageSearchResponse {
+  query: string
+  total: number
+  packages: PackageEntry[]
+}

@@ -29,6 +29,11 @@ var (
 	serveJenkinsUser    string
 	serveJenkinsToken   string
 	serveJenkinsWorkers string
+
+	// Package-search index override. Empty uses the copy embedded at build
+	// time; setting this to a directory (e.g. output of `cmd/ict-index`)
+	// swaps the catalogue at startup without a rebuild.
+	servePackagesDir string
 )
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
@@ -74,6 +79,11 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().StringVar(&serveJenkinsWorkers, "jenkins-workers-path", envOrDefault("JENKINS_WORKERS_PATH", "ict-farm/workers"),
 		"Folder path under which the worker-* jobs live (env: JENKINS_WORKERS_PATH)")
 
+	serveCmd.Flags().StringVar(&servePackagesDir, "packages-dir", "",
+		"Directory of package-search index shards (from `cmd/ict-index`). "+
+			"When empty, the shards embedded at build time under "+
+			"internal/api/data/packages/ are used.")
+
 	return serveCmd
 }
 
@@ -97,6 +107,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		JenkinsUser:        serveJenkinsUser,
 		JenkinsToken:       serveJenkinsToken,
 		JenkinsWorkersPath: serveJenkinsWorkers,
+		PackagesDir:        servePackagesDir,
 	})
 	if err != nil {
 		return err

@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { Theme } from '../store'
 
-type View = 'basic' | 'advanced' | 'builds'
+type View = 'basic' | 'advanced' | 'interactive' | 'builds'
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 interface HeaderProps {
@@ -15,6 +15,7 @@ interface HeaderProps {
 const tabs: { id: View; label: string }[] = [
   { id: 'basic', label: 'Basic' },
   { id: 'advanced', label: 'Advanced' },
+  { id: 'interactive', label: 'Interactive' },
   { id: 'builds', label: 'Build Image' },
 ]
 

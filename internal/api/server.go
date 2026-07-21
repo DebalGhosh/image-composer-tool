@@ -31,6 +31,11 @@ type Config struct {
 	JenkinsUser        string
 	JenkinsToken       string
 	JenkinsWorkersPath string // folder path, e.g. "ict-farm/workers"
+
+	// PackagesDir overrides the embedded package-search index. Empty uses the
+	// index bundled at build time via //go:embed. Set to a live directory
+	// (e.g. one just written by `cmd/ict-index`) to refresh without a rebuild.
+	PackagesDir string
 }
 
 // Server holds the API's dependencies and shared state.
@@ -39,6 +44,7 @@ type Server struct {
 	manifest *Manifest
 	tracker  *buildTracker
 	jenkins  *jenkinsClient // nil when Jenkins env vars aren't set
+	packages *packageIndex  // package-search catalogue; nil-safe when empty
 }
 
 // New constructs a Server, loading and validating the embedded manifest.
@@ -61,6 +67,7 @@ func New(cfg Config) (*Server, error) {
 		manifest: m,
 		tracker:  newBuildTracker(),
 		jenkins:  newJenkinsClient(cfg),
+		packages: loadPackageIndex(cfg.PackagesDir),
 	}, nil
 }
 

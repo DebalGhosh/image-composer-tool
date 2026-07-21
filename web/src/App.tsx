@@ -3,12 +3,13 @@ import { api } from './api/client'
 import { useStore, useToast } from './store'
 import { BasicPage } from './components/BasicPage'
 import { AdvancedPage } from './components/AdvancedPage'
+import { InteractivePage } from './components/InteractivePage'
 import { BuildImagePage } from './components/BuildImagePage'
 import { Header } from './components/Header'
 import { ToastContainer } from './components/toast/ToastContainer'
 
 type LoadState = 'loading' | 'ready' | 'error'
-type View = 'basic' | 'advanced' | 'builds'
+type View = 'basic' | 'advanced' | 'interactive' | 'builds'
 type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 export default function App() {
@@ -113,6 +114,12 @@ export default function App() {
           </div>
           <div hidden={view !== 'advanced'}>
             <AdvancedPage
+              onBuildStarted={onBuildStarted}
+              buildInProgress={buildStatus === 'running'}
+            />
+          </div>
+          <div hidden={view !== 'interactive'}>
+            <InteractivePage
               onBuildStarted={onBuildStarted}
               buildInProgress={buildStatus === 'running'}
             />

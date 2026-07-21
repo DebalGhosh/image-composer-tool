@@ -73,6 +73,89 @@ export interface ToastInput {
   duration?: number
 }
 
+// --- Interactive-tab draft model ---------------------------------------
+// Structured, form-editable model of a CoreV1 image spec. The Interactive
+// tab edits this shape; on Build the same object is serialized to YAML and
+// posted to the same backend as the Advanced/Basic tabs. Kept in the store
+// (rather than local component state) so tab switches don't discard edits,
+// mirroring the advancedYaml slice above.
+
+export interface Partition {
+  id: string
+  name: string
+  role: 'efi' | 'bios-boot' | 'swap' | 'root' | 'verity' | 'userdata' | 'custom'
+  sizeMiB: number
+  fillRemaining?: boolean
+  type: string
+  fsType: string
+  fsLabel?: string
+  mountPoint: string
+  mountOptions?: string
+  flags: string[]
+  typeUUID?: string
+}
+
+export interface UserConfig {
+  name: string
+  password: string
+  hashAlgo: 'sha512' | 'bcrypt'
+  groups: string[]
+  sudo: boolean
+  home: string
+  shell: string
+}
+
+export interface InteractiveDraft {
+  imageName: string
+  imageVersion: string
+  target: { os: string; dist: string; arch: string; imageType: string }
+  disk: {
+    sizeGiB: number
+    partitionTableType: 'gpt' | 'mbr'
+    partitions: Partition[]
+  }
+  kernel: {
+    version: string
+    cmdline: string
+    packages: string[]
+    enableExtraModules: string
+    uki: boolean
+  }
+  packages: string[]
+  hostname: string
+  /** Single user in v1 — null means "no user block emitted". */
+  user: UserConfig | null
+  /**
+   * Read-only round-trip carriers: sections we parse out of a loaded seed
+   * but don't yet expose in the form. Kept on the draft so a Build after
+   * an Interactive edit preserves them verbatim.
+   */
+  inheritedConfigurations: { cmd: string }[]
+  inheritedRepositories: unknown[]
+  /** Raw parsed YAML from the seed (or null when starting empty). */
+  baseDoc: unknown | null
+}
+
+export const emptyInteractiveDraft: InteractiveDraft = {
+  imageName: '',
+  imageVersion: '',
+  target: { os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
+  disk: { sizeGiB: 8, partitionTableType: 'gpt', partitions: [] },
+  kernel: {
+    version: '',
+    cmdline: 'console=ttyS0,115200 console=tty0 loglevel=7',
+    packages: [],
+    enableExtraModules: '',
+    uki: false,
+  },
+  packages: [],
+  hostname: '',
+  user: null,
+  inheritedConfigurations: [],
+  inheritedRepositories: [],
+  baseDoc: null,
+}
+
 interface AppState {
   manifest: Manifest | null
   selection: Selection
@@ -89,12 +172,27 @@ interface AppState {
    * operator wants to discard their edits and start over.
    */
   advancedSeedPick: string
+  /**
+   * Interactive-tab draft. null means "the operator hasn't touched the tab
+   * yet"; the first edit or seed-load materializes it (from
+   * emptyInteractiveDraft or the parsed seed respectively).
+   */
+  interactiveDraft: InteractiveDraft | null
+  /** Interactive-tab seed-dropdown selection — same contract as advancedSeedPick. */
+  interactiveSeedPick: string
   theme: Theme
   toasts: Toast[]
   setManifest: (m: Manifest) => void
   setField: (key: keyof Selection, value: string) => void
   setAdvancedYaml: (yaml: string) => void
   setAdvancedSeedPick: (v: string) => void
+  /** Shallow-merge patch into the current draft (materializing from empty if null). */
+  setInteractiveDraft: (patch: Partial<InteractiveDraft>) => void
+  /** Clear the draft and the seed-dropdown pick together (Reset button). */
+  resetInteractiveDraft: () => void
+  setInteractiveSeedPick: (v: string) => void
+  /** Full replacement — used after parsing a freshly loaded seed. */
+  loadInteractiveDraft: (draft: InteractiveDraft) => void
   setTheme: (theme: Theme) => void
   pushToast: (t: ToastInput) => string
   dismissToast: (id: string) => void
@@ -119,11 +217,22 @@ export const useStore = create<AppState>((set) => ({
   selection: emptySelection,
   advancedYaml: '',
   advancedSeedPick: '',
+  interactiveDraft: null,
+  interactiveSeedPick: '',
   theme: initialTheme,
   toasts: [],
   setManifest: (m) => set({ manifest: m }),
   setAdvancedYaml: (yaml) => set({ advancedYaml: yaml }),
   setAdvancedSeedPick: (v) => set({ advancedSeedPick: v }),
+  setInteractiveDraft: (patch) =>
+    set((state) => {
+      const base = state.interactiveDraft ?? emptyInteractiveDraft
+      return { interactiveDraft: { ...base, ...patch } }
+    }),
+  resetInteractiveDraft: () =>
+    set({ interactiveDraft: null, interactiveSeedPick: '' }),
+  setInteractiveSeedPick: (v) => set({ interactiveSeedPick: v }),
+  loadInteractiveDraft: (draft) => set({ interactiveDraft: draft }),
   setTheme: (theme) => {
     try {
       window.localStorage.setItem(THEME_KEY, theme)

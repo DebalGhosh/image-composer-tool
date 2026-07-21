@@ -1,0 +1,14 @@
+[
+  { "n": "linux-image-amd64",           "v": "6.12.5-1",         "d": "Linux kernel image meta-package (Debian trixie, amd64).",              "a": "amd64", "s": "kernel",   "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "linux-image-arm64",           "v": "6.12.5-1",         "d": "Linux kernel image meta-package (Debian trixie, arm64).",              "a": "arm64", "s": "kernel",   "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "linux-headers-amd64",         "v": "6.12.5-1",         "d": "Linux kernel headers matching linux-image-amd64.",                     "a": "amd64", "s": "kernel",   "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "systemd",                     "v": "257.2-3",          "d": "system and service manager.",                                          "a": "amd64", "s": "admin",    "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "openssh-server",              "v": "1:9.9p1-3",        "d": "Secure Shell (SSH) server for secure remote logins.",                  "a": "amd64", "s": "net",      "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "sudo",                        "v": "1.9.15p5-3",       "d": "Provide limited super user privileges to specific users.",             "a": "amd64", "s": "admin",    "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "curl",                        "v": "8.11.0-2",         "d": "command line tool for transferring data with URL syntax.",             "a": "amd64", "s": "web",      "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "vim",                         "v": "2:9.1.0967-1",     "d": "Vi IMproved - enhanced vi editor.",                                    "a": "amd64", "s": "editors",  "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "python3",                     "v": "3.13.0-2",         "d": "interactive high-level object-oriented language (default python3 version).","a": "amd64","s": "python", "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "docker.io",                   "v": "27.4.1-1",         "d": "Linux container runtime (Debian package of Docker Engine).",           "a": "amd64", "s": "admin",    "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "grub-efi-amd64",              "v": "2.12-6",           "d": "GRand Unified Bootloader, version 2 (EFI-AMD64 version).",             "a": "amd64", "s": "grub2",    "r": "trixie/main",       "o": "debian13", "t": "deb" },
+  { "n": "network-manager",             "v": "1.48.10-1",        "d": "network management framework (daemon and userspace tools).",           "a": "amd64", "s": "admin",    "r": "trixie/main",       "o": "debian13", "t": "deb" }
+]
