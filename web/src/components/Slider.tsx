@@ -1,15 +1,21 @@
-import { useId, type CSSProperties } from 'react'
+import { useEffect, useId, useState, type CSSProperties } from 'react'
 import { fieldLabelClass, fieldLabelStyle } from './Select'
 
 /* ------------------------------------------------------------------------- *
- * <Slider> — themed, fully-controlled range input with a numeric readout.
+ * <Slider> — themed, fully-controlled range input with an editable numeric
+ * readout.
  *
  * Uses `accent-color: var(--classic-blue)` so the built-in track fill and
  * thumb inherit the app's brand blue on modern browsers, with WebKit/Moz
  * overrides below to tighten track height (~6 px) and thumb size (~16 px)
  * and to paint a focus ring on the thumb.
  *
- * No internal state — the parent owns `value`. No portal, no side-effects.
+ * The readout sitting next to the slider is an <input type="number">, so
+ * the user can also type a value directly. The typing UX is the tricky
+ * part: naive `parseFloat + clamp` on every keystroke would rewrite "12"
+ * to "1" the moment the user typed the first digit. Instead we keep a
+ * decoupled `draft` string while the field is focused and commit-clamp
+ * only on blur/Enter. See `commitDraft()`.
  * ------------------------------------------------------------------------- */
 
 interface SliderProps {
@@ -77,6 +83,15 @@ const sliderCss = `
   box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.28);
   transform: scale(1.05);
 }
+/* Hide the native number-input spinner arrows — the slider itself is the
+ * spinner, and the arrows crowd the small readout box.
+ */
+.ict-slider-readout::-webkit-outer-spin-button,
+.ict-slider-readout::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.ict-slider-readout { -moz-appearance: textfield; }
 `
 
 let styleInjected = false
@@ -89,10 +104,19 @@ function ensureStyle() {
   styleInjected = true
 }
 
-const readoutStyle: CSSProperties = {
-  background: 'var(--section-background)',
+const readoutBoxStyle: CSSProperties = {
+  background: 'var(--input-background)',
   borderColor: 'var(--border-color)',
   color: 'var(--font-color)',
+}
+
+// Snap `n` to the nearest valid slider step within [min, max]. Used when the
+// user commits a typed value so it maps 1:1 to a reachable slider position.
+function snap(n: number, min: number, max: number, step: number): number {
+  if (Number.isNaN(n)) return min
+  const clamped = Math.min(max, Math.max(min, n))
+  const stepped = Math.round((clamped - min) / step) * step + min
+  return Math.min(max, Math.max(min, stepped))
 }
 
 export function Slider({
@@ -115,7 +139,31 @@ export function Slider({
   const labelId = label ? inputId + '-label' : undefined
   const hintId = hint ? inputId + '-hint' : undefined
 
+  // While the readout is focused we keep an unclamped string draft so
+  // partial input ("", "1" on the way to "12") doesn't get rewritten out
+  // from under the user. When focus leaves, `commitDraft()` snaps to a
+  // valid slider step and pushes it upstream. Outside the focused window,
+  // the visible value tracks `value` prop exactly — so slider drags update
+  // the readout in real time.
+  const [draft, setDraft] = useState<string>('')
+  const [editing, setEditing] = useState(false)
+  useEffect(() => {
+    if (!editing) setDraft(String(value))
+  }, [value, editing])
+
   const readout = format ? format(value) : `${value}${unit ? ' ' + unit : ''}`
+
+  const commitDraft = () => {
+    const parsed = Number(draft.trim())
+    if (draft.trim() === '' || Number.isNaN(parsed)) {
+      setDraft(String(value)) // roll back invalid entries to the last good value
+    } else {
+      const snapped = snap(parsed, min, max, step)
+      if (snapped !== value) onChange(snapped)
+      setDraft(String(snapped))
+    }
+    setEditing(false)
+  }
 
   return (
     <div className="mb-4">
@@ -142,13 +190,48 @@ export function Slider({
           aria-valuetext={readout}
           onChange={(e) => onChange(Number(e.target.value))}
         />
-        <span
-          className="inline-block min-w-[64px] rounded-md border px-2 py-1 text-center font-mono text-xs"
-          style={readoutStyle}
-          aria-hidden="true"
+        <div
+          className="inline-flex min-w-[92px] items-center gap-1 rounded-md border px-2 py-1 font-mono text-xs focus-within:ring-2 focus-within:ring-[var(--classic-blue)]"
+          style={readoutBoxStyle}
         >
-          {readout}
-        </span>
+          <input
+            aria-label={label ? `${label} (numeric)` : 'value'}
+            type="number"
+            inputMode="numeric"
+            className="ict-slider-readout w-full bg-transparent text-right outline-none disabled:cursor-not-allowed"
+            style={{ color: 'inherit' }}
+            value={editing ? draft : String(value)}
+            min={min}
+            max={max}
+            step={step}
+            disabled={disabled}
+            onFocus={() => {
+              setDraft(String(value))
+              setEditing(true)
+            }}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commitDraft()
+                ;(e.target as HTMLInputElement).blur()
+              } else if (e.key === 'Escape') {
+                setDraft(String(value))
+                setEditing(false)
+                ;(e.target as HTMLInputElement).blur()
+              }
+            }}
+          />
+          {unit && !format && (
+            <span
+              className="select-none whitespace-nowrap opacity-70"
+              aria-hidden
+            >
+              {unit}
+            </span>
+          )}
+        </div>
       </div>
       {hint && (
         <p id={hintId} className="mt-1 text-xs" style={{ color: 'var(--muted-color)' }}>

@@ -621,7 +621,7 @@ function RolePicker({
             disabled={isDisabled}
             onClick={() => onAdd(r)}
             title={title}
-            className="group inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="group inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)] disabled:cursor-not-allowed disabled:opacity-50"
             style={{
               background: isDisabled
                 ? 'var(--input-background)'
@@ -1064,7 +1064,7 @@ function PartitionRow({
         )}
         <button
           type="button"
-          className="ml-auto inline-flex items-center gap-1 text-xs font-semibold hover:underline"
+          className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold hover:underline"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >
@@ -1158,7 +1158,7 @@ function FlagChips({
             key={f}
             type="button"
             onClick={() => toggle(f)}
-            className="rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
+            className="cursor-pointer rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
             style={{
               background: on
                 ? 'color-mix(in srgb, var(--classic-blue) 22%, var(--section-background))'
@@ -1198,7 +1198,7 @@ function IconButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)] disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)] disabled:cursor-not-allowed disabled:opacity-40"
       style={{
         background: 'var(--input-background)',
         borderColor: 'var(--border-color)',

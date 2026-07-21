@@ -431,7 +431,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                   type="button"
                   onClick={onReloadSeed}
                   disabled={!seedPick || seedBusy || busy}
-                  className="rounded-md border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
+                  className="cursor-pointer rounded-md border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
                   style={{ borderColor: 'var(--border-color)', color: 'var(--font-color)' }}
                   title={
                     seedPick
@@ -845,7 +845,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
       <footer className="action-footer">
         <div className="flex items-center gap-3 px-6 py-3">
           <button
-            className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--metrics-gradient)' }}
             disabled={!complete || busy || buildInProgress}
             onClick={onBuild}
@@ -951,7 +951,7 @@ function Segmented<T extends string>({
               role="radio"
               aria-checked={on}
               onClick={() => onChange(o.value)}
-              className="rounded px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
+              className="cursor-pointer rounded px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
               style={{
                 background: on ? 'var(--classic-blue)' : 'transparent',
                 color: on ? 'white' : 'var(--font-color)',

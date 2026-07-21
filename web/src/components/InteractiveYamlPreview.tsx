@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { YamlEditor } from './YamlEditor'
 import {
@@ -106,19 +106,7 @@ export function InteractiveYamlPreview({
           />
           <span>{pillLabel}</span>
         </div>
-        {showYaml && (
-          <button
-            className="rounded border px-2 py-0.5 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
-            style={{
-              borderColor: 'var(--border-color)',
-              color: 'var(--muted-color)',
-            }}
-            onClick={() => navigator.clipboard.writeText(yaml)}
-            title="Copy YAML to clipboard"
-          >
-            Copy
-          </button>
-        )}
+        {showYaml && <CopyButton text={yaml} />}
       </div>
 
       <div
@@ -199,5 +187,116 @@ function ErrorPanel({ message }: { message: string }) {
         <p className="mt-1 font-mono text-xs opacity-80">{message}</p>
       </div>
     </div>
+  )
+}
+
+/**
+ * GitHub-style copy icon button with a transient "Copied!" affordance.
+ *
+ * Swaps the clipboard glyph for a checkmark for ~1.5s after a successful
+ * write, and shows a floating chip so the confirmation is unmistakable
+ * even for users who read the icon peripherally. Uses the async clipboard
+ * API with a synchronous execCommand fallback for non-HTTPS localhost
+ * environments where `navigator.clipboard` isn't available.
+ */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const timerRef = useRef<number | null>(null)
+
+  const copy = async () => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        // Fallback for insecure origins (some corporate dev hosts): drop a
+        // hidden textarea, select, execCommand, remove. Deprecated but the
+        // only path when navigator.clipboard is blocked.
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      setCopied(true)
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+      timerRef.current = window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Silent — the user will see the icon didn't flip and can retry.
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+    }
+  }, [])
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? 'Copied to clipboard' : 'Copy YAML to clipboard'}
+        title={copied ? 'Copied!' : 'Copy YAML'}
+        className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded border transition-colors hover:bg-black/5 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
+        style={{
+          borderColor: 'var(--border-color)',
+          color: copied ? 'var(--success)' : 'var(--muted-color)',
+        }}
+      >
+        {copied ? <CheckIcon /> : <ClipboardIcon />}
+      </button>
+      {/* Floating chip. Positioned ABOVE the button so it never gets clipped
+       *  by the YAML editor rendered directly below the header. Fades via
+       *  opacity + a small slide, pointer-events:none so the chip never eats
+       *  a second click. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute right-0 bottom-full mb-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold shadow-sm"
+        style={{
+          background: 'var(--success)',
+          color: 'white',
+          opacity: copied ? 1 : 0,
+          transform: copied ? 'translateY(0)' : 'translateY(4px)',
+          transition:
+            'opacity 160ms ease, transform 160ms cubic-bezier(0.22, 0.7, 0.32, 1)',
+        }}
+      >
+        Copied!
+      </span>
+    </div>
+  )
+}
+
+// GitHub's octicon-copy paths, condensed. 16px viewBox.
+function ClipboardIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+    </svg>
   )
 }
