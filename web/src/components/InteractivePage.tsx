@@ -322,6 +322,12 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
     if (hasNonTrivialEdits(storeDraft)) {
       if (!window.confirm('Replace the current draft with the seed template?')) return
     }
+    // Mirror the Advanced tab: pin the dropdown selection synchronously so
+    // it reflects the pick during the async compose+parse round-trip. Without
+    // this the <select> would stay on the empty placeholder until the fetch
+    // resolved (~100-300ms feels like the click didn't register), or would
+    // revert to empty forever if compose threw.
+    setSeedPick(raw)
     await loadSeed(Number(raw))
   }
 
