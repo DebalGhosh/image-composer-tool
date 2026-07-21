@@ -286,6 +286,14 @@ export function YamlEditor({
         '.cm-foldGutter .cm-gutterElement:hover': {
           color: 'var(--font-color)',
         },
+        // Hide the inline "…" placeholder chip that CodeMirror renders in
+        // place of folded ranges. The gutter chevron already communicates
+        // the fold state; the chip adds visual noise inside otherwise
+        // clean YAML. `display: none` collapses the whole widget so the
+        // folded ranges just look like a truncated line.
+        '.cm-foldPlaceholder': {
+          display: 'none',
+        },
       }),
       // Caller-provided extensions (line-diff decorations, custom themes)
       // are appended last so they can override earlier registrations if needed.
