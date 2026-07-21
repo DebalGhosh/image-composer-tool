@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { fieldLabelClass, fieldLabelStyle } from './Select'
 
 /* ------------------------------------------------------------------------- *
