@@ -66,22 +66,51 @@ const sliderCss = `
   border: 2px solid var(--input-background);
   margin-top: -5px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-  transition: box-shadow 120ms ease, transform 120ms ease;
+  /* Smooth grow/shrink on hover and focus. Transition both scale and
+   * the outer halo box-shadow together so the transform and the ring
+   * land at the same time. */
+  transition:
+    box-shadow 180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    transform  180ms cubic-bezier(0.22, 0.7, 0.32, 1);
 }
 .ict-slider-range::-moz-range-thumb {
   width: 16px; height: 16px; border-radius: 9999px;
   background: var(--classic-blue);
   border: 2px solid var(--input-background);
   box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-  transition: box-shadow 120ms ease, transform 120ms ease;
+  transition:
+    box-shadow 180ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    transform  180ms cubic-bezier(0.22, 0.7, 0.32, 1);
+}
+/* Hover on the range input propagates through the shadow tree to the
+ * thumb pseudo. Grow ~30% and add a softer halo — smaller than the
+ * :focus-visible ring so mouse hover stays visually distinct from
+ * keyboard focus. */
+.ict-slider-range:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.35);
+  box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.16), 0 1px 2px rgba(0,0,0,0.25);
+}
+.ict-slider-range:hover:not(:disabled)::-moz-range-thumb {
+  transform: scale(1.35);
+  box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.16), 0 1px 2px rgba(0,0,0,0.25);
+}
+/* Active (mouse-down / drag) — a hair larger still, with a brighter
+ * halo, so the "grabbed" state is unmistakable. */
+.ict-slider-range:active:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.5);
+  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.28), 0 2px 4px rgba(0,0,0,0.3);
+}
+.ict-slider-range:active:not(:disabled)::-moz-range-thumb {
+  transform: scale(1.5);
+  box-shadow: 0 0 0 5px rgba(0, 113, 197, 0.28), 0 2px 4px rgba(0,0,0,0.3);
 }
 .ict-slider-range:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.28);
-  transform: scale(1.05);
+  transform: scale(1.35);
 }
 .ict-slider-range:focus-visible::-moz-range-thumb {
   box-shadow: 0 0 0 4px rgba(0, 113, 197, 0.28);
-  transform: scale(1.05);
+  transform: scale(1.35);
 }
 /* Hide the native number-input spinner arrows — the slider itself is the
  * spinner, and the arrows crowd the small readout box.
