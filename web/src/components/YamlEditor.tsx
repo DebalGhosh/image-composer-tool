@@ -16,6 +16,7 @@ import CodeMirror, {
   type ReactCodeMirrorRef,
 } from '@uiw/react-codemirror'
 import { yaml } from '@codemirror/lang-yaml'
+import { foldGutter } from '@codemirror/language'
 import { vscodeDark, vscodeLight } from '@uiw/codemirror-theme-vscode'
 import { useStore } from '../store'
 
@@ -139,6 +140,52 @@ function CollapseIcon() {
   )
 }
 
+// Path/viewBox copied from the accordion Card's Chevron so the fold-gutter
+// markers speak the same visual vocabulary as every other "reveal/dismiss"
+// affordance in the app. Uses raw DOM (not React) because CodeMirror's
+// FoldGutterConfig.markerDOM callback must return an HTMLElement.
+const FOLD_CHEVRON_PATH =
+  'M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z'
+const FOLD_CHEVRON_VIEWBOX = '0 0 20 20'
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * Build a marker element for the fold gutter. `open=true` means the line
+ * IS foldable (currently open) — chevron points down, inviting a fold.
+ * `open=false` means the line is currently folded — chevron rotated -90°
+ * (points right, standard "closed" affordance).
+ */
+function buildFoldChevron(open: boolean): HTMLSpanElement {
+  const wrap = document.createElement('span')
+  // Inline-flex so the wrap sizes to the SVG and centers vertically inside
+  // the gutter row. Muted color matches the surrounding line-number tone.
+  wrap.style.display = 'inline-flex'
+  wrap.style.alignItems = 'center'
+  wrap.style.justifyContent = 'center'
+  wrap.style.width = '14px'
+  wrap.style.height = '14px'
+  wrap.style.cursor = 'pointer'
+  wrap.setAttribute('aria-hidden', 'true')
+
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', FOLD_CHEVRON_VIEWBOX)
+  svg.setAttribute('width', '12')
+  svg.setAttribute('height', '12')
+  svg.style.color = 'currentColor'
+  // Down when open (matches accordion "open=points down" convention).
+  // -90° when folded so it points right, echoing the standard tree-node
+  // "closed" marker without breaking the shared chevron shape.
+  svg.style.transform = open ? 'rotate(0deg)' : 'rotate(-90deg)'
+  svg.style.transition = 'transform 180ms cubic-bezier(0.22, 0.7, 0.32, 1)'
+
+  const path = document.createElementNS(SVG_NS, 'path')
+  path.setAttribute('d', FOLD_CHEVRON_PATH)
+  path.setAttribute('fill', 'currentColor')
+  svg.appendChild(path)
+  wrap.appendChild(svg)
+  return wrap
+}
+
 /**
  * YAML editor wrapping CodeMirror 6.
  *
@@ -211,6 +258,11 @@ export function YamlEditor({
       yaml(),
       // Prec.highest so our Tab binding wins over any lower-precedence default.
       Prec.highest(tabInsertTwoSpaces),
+      // Explicit fold gutter with a custom marker so the collapse/expand
+      // affordance on YAML blocks (arrays, nested maps) uses the SAME
+      // chevron glyph as the accordion Card headers. basicSetup's default
+      // foldGutter is disabled below so this doesn't stack.
+      foldGutter({ markerDOM: buildFoldChevron }),
       EditorView.theme({
         '&': { fontSize: '13px' },
         '.cm-scroller': {
@@ -221,6 +273,19 @@ export function YamlEditor({
         },
         '.cm-content': { padding: '8px 0' },
         '.cm-gutters': { userSelect: 'none' },
+        // Give the fold-gutter chevrons a bit of breathing room and a
+        // muted tone that lifts on hover (matches the accordion chevron's
+        // muted-then-brighter feel).
+        '.cm-foldGutter': {
+          color: 'var(--muted-color)',
+          minWidth: '16px',
+        },
+        '.cm-foldGutter .cm-gutterElement': {
+          padding: '0 2px',
+        },
+        '.cm-foldGutter .cm-gutterElement:hover': {
+          color: 'var(--font-color)',
+        },
       }),
       // Caller-provided extensions (line-diff decorations, custom themes)
       // are appended last so they can override earlier registrations if needed.
@@ -235,7 +300,10 @@ export function YamlEditor({
       highlightActiveLine: !readOnly,
       highlightActiveLineGutter: !readOnly,
       bracketMatching: true,
-      foldGutter: true,
+      // Disable the default fold gutter — we register our own above with
+      // a matching-chevron markerDOM. Leaving this true would stack two
+      // gutters next to each other.
+      foldGutter: false,
       autocompletion: false,
       searchKeymap: true,
       history: true,
