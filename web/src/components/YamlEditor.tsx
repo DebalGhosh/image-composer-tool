@@ -289,10 +289,34 @@ export function YamlEditor({
         // Hide the inline "…" placeholder chip that CodeMirror renders in
         // place of folded ranges. The gutter chevron already communicates
         // the fold state; the chip adds visual noise inside otherwise
-        // clean YAML. `display: none` collapses the whole widget so the
-        // folded ranges just look like a truncated line.
+        // clean YAML. `visibility: hidden` collapses the chip visually
+        // while KEEPING the element in the DOM — we still need it there
+        // as an anchor for the `:has()` selector below that tints the
+        // enclosing line.
         '.cm-foldPlaceholder': {
-          display: 'none',
+          visibility: 'hidden',
+          // Zero-width so the line's text layout matches an unfolded
+          // line (no phantom gap where "…" used to sit).
+          fontSize: 0,
+          padding: 0,
+          margin: 0,
+        },
+        // Tint the entire line that hosts a folded range so users can see
+        // at a glance "this row hides more content beneath it". A soft
+        // classic-blue wash matches the diff-highlight family used by
+        // Interactive YAML preview edits, and stays subtle enough to
+        // read comfortably in both light and dark themes.
+        '.cm-line:has(.cm-foldPlaceholder)': {
+          backgroundColor:
+            'color-mix(in srgb, var(--classic-blue) 12%, transparent)',
+          boxShadow:
+            'inset 2px 0 0 0 color-mix(in srgb, var(--classic-blue) 60%, transparent)',
+        },
+        // Same tint but a touch stronger on hover so the affordance
+        // "click this to unfold" gets a subtle bump.
+        '.cm-line:has(.cm-foldPlaceholder):hover': {
+          backgroundColor:
+            'color-mix(in srgb, var(--classic-blue) 18%, transparent)',
         },
       }),
       // Caller-provided extensions (line-diff decorations, custom themes)
