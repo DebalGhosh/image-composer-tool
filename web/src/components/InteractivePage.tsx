@@ -1085,7 +1085,11 @@ function Segmented<T extends string>({
               role="radio"
               aria-checked={on}
               onClick={() => onChange(o.value)}
-              className="relative z-10 cursor-pointer rounded px-3 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[var(--classic-blue)]"
+              // focus-visible (not focus) so the ring only shows on keyboard
+              // navigation. On mouse click the sliding pill IS the affordance
+              // — a competing focus-ring flashed on top of it as a "black-
+              // bordered box" during the 220ms slide.
+              className="relative z-10 cursor-pointer rounded px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--classic-blue)]"
               style={{
                 background: 'transparent',
                 // Only the label colour transitions per-button — the pill
