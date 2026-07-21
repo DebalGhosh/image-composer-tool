@@ -127,7 +127,6 @@ export function PackageSearchCombobox({
 }: PackageSearchComboboxProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [entries, setEntries] = useState<PackageEntry[]>([])
-  const [indexMissing, setIndexMissing] = useState(false)
   // `loading` isn't rendered directly yet — kept for future spinner wiring so
   // the placeholder reflects "searching…" state without another prop dance.
   const [, setLoading] = useState(false)
@@ -146,38 +145,26 @@ export function PackageSearchCombobox({
     // "does the index exist at all?" probe on mount.
     if (!os) {
       setEntries([])
-      setIndexMissing(false)
       return
     }
     const q = searchQuery.trim()
     const id = ++fetchIdRef.current
     setLoading(true)
-    // Reset the banner state at the start of each fetch so a stale-true from
-    // a previous different-os probe can't linger while the new request is in
-    // flight. The response handler below latches the definitive value.
-    setIndexMissing(false)
     const handle = window.setTimeout(() => {
       api
         .searchPackages({ os, arch: normalizeArch(arch), q, limit: SEARCH_LIMIT })
         .then((res) => {
           if (id !== fetchIdRef.current) return
           setEntries(res.packages ?? [])
-          // Empty-query zero-total is the only reliable signal we have — the
-          // /packages endpoint doesn't expose the X-Package-Index-Missing
-          // header through jsonFetch. A non-empty query that legitimately
-          // returns 0 shouldn't flip the banner (that's just "no matches").
-          setIndexMissing(q.length === 0 && (res.total ?? 0) === 0)
           setLoading(false)
         })
         .catch((err) => {
           if (id !== fetchIdRef.current) return
-          // Network / server failure — treat as "index is available but this
-          // request failed", not "index missing". The user gets an empty list
-          // and the console message; a toast would be too loud for keystroke
-          // errors on a stale fetch.
+          // Network / server failure — user gets an empty list and the console
+          // message; a toast would be too loud for keystroke errors on a stale
+          // fetch. The +Add synthetic row still lets them add packages by name.
           console.warn('[PackageSearchCombobox] search failed:', err)
           setEntries([])
-          setIndexMissing(false)
           setLoading(false)
         })
     }, DEBOUNCE_MS)
@@ -223,7 +210,7 @@ export function PackageSearchCombobox({
   //   2. Otherwise show every entry the server returned.
   //   3. If the index is missing AND the query looks like a valid package
   //      name, prepend a synthetic "+ Add …" row so the user can drop
-  //      something in without a matching index.
+  //      something in even if the server has no matching entry.
   const options = useMemo<MultiComboboxOption[]>(() => {
     const q = searchQuery.trim()
     let base: MultiComboboxOption[]
@@ -251,12 +238,12 @@ export function PackageSearchCombobox({
         description: describe(e.version, e.description),
       }))
     }
-    // User-added escape hatch — only when the index is missing (so the user
-    // can't rely on the server-side list) and the typed value looks like a
-    // real package name. Also suppress when the value is already selected
-    // (would show as a duplicate row) or already in `base` (server has it).
+    // User-added escape hatch — offered whenever the typed value looks like
+    // a valid package name and isn't already surfaced (either in the current
+    // server hits or already selected). This lets the user pin arbitrary
+    // package names even when the server index has no matching entry, without
+    // needing the misleading "index is missing" banner as a precondition.
     if (
-      indexMissing &&
       q.length > 0 &&
       PKG_NAME_RE.test(q) &&
       !values.includes(q) &&
@@ -272,7 +259,7 @@ export function PackageSearchCombobox({
       ]
     }
     return base
-  }, [entries, searchQuery, miniSearch, indexMissing, values])
+  }, [entries, searchQuery, miniSearch, values])
 
   // groupBy handler — MultiCombobox invokes this for every option to build
   // sticky headers. We short-circuit user-added rows to 'Other' so the "+ Add"
@@ -283,43 +270,22 @@ export function PackageSearchCombobox({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Only surface the empty-index banner when we truly have nothing to
-          show — a non-empty entries list means the fetch succeeded and the
-          user can search normally, so the banner would be actively wrong. */}
-      {indexMissing && entries.length === 0 && (
-        <div
-          className="rounded-md border px-3 py-2 text-xs"
-          style={{
-            background:
-              'color-mix(in srgb, var(--warning) 10%, var(--section-background))',
-            borderColor:
-              'color-mix(in srgb, var(--warning) 55%, transparent)',
-            color: 'var(--font-color)',
-          }}
-          role="status"
-        >
-          No packages available for os=<code>{os}</code>. The index isn't built
-          yet — you can still type a package name to add it manually.
-        </div>
-      )}
-      <MultiCombobox
-        ariaLabel="Additional packages"
-        values={values}
-        onChange={onChange}
-        options={options}
-        placeholder={
-          disabled
-            ? 'Select an OS to search packages…'
-            : indexMissing
-              ? 'Type a package name to add…'
-              : 'Search packages…'
-        }
-        disabled={disabled}
-        groupBy={groupBy}
-        onSearchChange={setSearchQuery}
-        searchValue={searchQuery}
-      />
-    </div>
+    // Banner deliberately removed: the +Add synthetic row (see `options`
+    // above) is now always available on a typed value, so the user has a
+    // reliable escape hatch without a warning that was prone to firing
+    // falsely during the (os → dist) → fetch handshake on seed load.
+    <MultiCombobox
+      ariaLabel="Additional packages"
+      values={values}
+      onChange={onChange}
+      options={options}
+      placeholder={
+        disabled ? 'Select an OS to search packages…' : 'Search packages…'
+      }
+      disabled={disabled}
+      groupBy={groupBy}
+      onSearchChange={setSearchQuery}
+      searchValue={searchQuery}
+    />
   )
 }
