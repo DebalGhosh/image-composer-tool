@@ -183,21 +183,34 @@ export function TextArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // While autosize owns the height, kill the built-in vertical scrollbar —
+  // otherwise browsers flash it during the first paint before scrollHeight
+  // is measured and it can flicker in and out as content wraps. Once the
+  // user manually drags to a fixed height, restore `overflow: auto` so
+  // scrolling still works if their chosen size is smaller than the content.
+  const overflowStyle: CSSProperties = manualResizeRef.current
+    ? { overflow: 'auto' }
+    : { overflow: 'hidden' }
+
   return (
     <textarea
       ref={ref}
       className={textareaControl + (className ? ' ' + className : '')}
-      style={{ ...controlBaseStyle, ...style }}
+      style={{ ...controlBaseStyle, ...overflowStyle, ...style }}
       value={value}
       onMouseDown={(e) => {
         // The resize handle sits in the bottom-right ~14px square. If the
         // user grabs it we stop autosizing so subsequent typing doesn't
-        // fight their manual height.
+        // fight their manual height, and switch overflow back to auto so
+        // scrolling works if they drag below content height.
         const el = e.currentTarget
         const box = el.getBoundingClientRect()
         const inHandle =
           e.clientX >= box.right - 16 && e.clientY >= box.bottom - 16
-        if (inHandle) manualResizeRef.current = true
+        if (inHandle) {
+          manualResizeRef.current = true
+          el.style.overflow = 'auto'
+        }
       }}
       {...rest}
     />

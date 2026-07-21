@@ -707,7 +707,6 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                   id="i-kernel-cmdline"
                   value={draft.kernel.cmdline}
                   onChange={(e) => patchKernel({ cmdline: e.target.value })}
-                  rows={1}
                   placeholder="console=ttyS0,115200 …"
                 />
               </div>
