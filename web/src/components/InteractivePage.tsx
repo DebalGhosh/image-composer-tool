@@ -630,13 +630,34 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
               </div>
             </Card>
 
-            {/* 3. Target */}
+            {/* 3. Target
+             *
+             * Layout: two symmetric 2-column rows, each grouping a pair of
+             * semantically-related fields at matching visual weights.
+             *
+             *   Row 1 — Family:   OS  |  Distribution     (both dropdowns)
+             *                                 – OS gates Distribution
+             *
+             *   Row 2 — Format:   Architecture | Image type   (both segmented)
+             *                                 – both pill selectors
+             *
+             * Previously Architecture and Image type each took a full-width
+             * row, so the card read as "2 dropdowns then 2 stacked bars" —
+             * mismatched vertical rhythm and wasted horizontal space on wide
+             * viewports. The paired grouping now gives the card a stable
+             * 2×2 shape while keeping the semantic gate (OS → Dist)
+             * visible in one row and the format pickers in the next.
+             *
+             * A subtle divider between the rows reinforces the family/format
+             * split without adding a heading.
+             */}
             <Card
               title="Target"
               titleStyle="section"
               collapsible
               className="mb-4"
             >
+              {/* Row 1: OS + Distribution — dropdowns, gated cascade */}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
                   <label
@@ -683,15 +704,28 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                   />
                 </div>
               </div>
-              <div className="mt-4">
+
+              {/* Divider marks the split between "which system" (row 1)
+               *  and "how the image is built" (row 2). Half-transparent
+               *  border so it stays discreet inside the card. */}
+              <div
+                className="my-4 h-px"
+                style={{
+                  background:
+                    'color-mix(in srgb, var(--border-color) 55%, transparent)',
+                }}
+              />
+
+              {/* Row 2: Architecture + Image type — segmented pills, same
+               *  visual weight, side-by-side for balance. Each Segmented
+               *  wraps internally on narrow columns so no chip clips. */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Segmented
                   label="Architecture"
                   value={draft.target.arch}
                   options={ARCH_OPTIONS}
                   onChange={(v) => patchTarget({ arch: v })}
                 />
-              </div>
-              <div>
                 <Segmented
                   label="Image type"
                   value={draft.target.imageType}
