@@ -193,6 +193,62 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
   const rafRef = useRef<number | null>(null)
   const prevCompleteRef = useRef<boolean | null>(null)
 
+  /* -------------------- User-driven collapse of the preview pane ---------- *
+   * Independent of `complete`. When the user clicks the toggle chevron on
+   * the divider, we animate the panel to 0% width and remember the size
+   * they were on so re-expand goes back to the same width. If they never
+   * dragged, the fallback is 45% — the same as the auto-open size.
+   */
+  const [previewCollapsed, setPreviewCollapsed] = useState(false)
+  const lastExpandedSizeRef = useRef<number>(45)
+
+  const animatePanel = useCallback((toPercent: number, ms: number) => {
+    const handle = rightPanelRef.current
+    if (!handle) return
+    const from = handle.getSize()
+    if (Math.abs(from - toPercent) < 0.5) {
+      handle.resize(toPercent)
+      return
+    }
+    const start = performance.now()
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3)
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / ms)
+      const size = from + (toPercent - from) * ease(t)
+      handle.resize(size)
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(step)
+      } else {
+        rafRef.current = null
+      }
+    }
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(step)
+  }, [])
+
+  const togglePreview = useCallback(() => {
+    const handle = rightPanelRef.current
+    if (!handle) return
+    if (previewCollapsed) {
+      // Expand back to the user's last-remembered width.
+      setPreviewCollapsed(false)
+      animatePanel(lastExpandedSizeRef.current, 420)
+    } else {
+      // Remember the current width so re-expand lands where they left it.
+      const current = handle.getSize()
+      if (current > 5) lastExpandedSizeRef.current = current
+      setPreviewCollapsed(true)
+      animatePanel(0, 320)
+    }
+  }, [previewCollapsed, animatePanel])
+
+  // Live-tracked right panel size (as % of the PanelGroup width). Used to
+  // pin the toggle button to the boundary between the two panels — the
+  // button lives outside the panels so it can float over the resize
+  // handle when the preview is expanded and hug the viewport edge when
+  // the preview is collapsed (right size = 0).
+  const [rightSizePct, setRightSizePct] = useState<number>(complete ? 45 : 0)
+
   useEffect(() => {
     if (prevCompleteRef.current === null) {
       prevCompleteRef.current = complete
@@ -203,6 +259,11 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
 
     const handle = rightPanelRef.current
     if (!handle) return
+
+    // If the user has manually collapsed the preview, don't yank it
+    // back open when `complete` flips true again (e.g. after switching
+    // seeds). Keep it collapsed until they click the toggle themselves.
+    if (previewCollapsed) return
 
     const from = handle.getSize()
     const to = complete ? 45 : 0
@@ -230,7 +291,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       rafRef.current = null
     }
-  }, [complete])
+  }, [complete, previewCollapsed])
 
   /* -------------------- Nested-field patch helpers -------------------------- */
   // setInteractiveDraft only shallow-merges. Nested slices (target, disk,
@@ -397,7 +458,17 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
 
   return (
     <div className="interactive-page-shell">
-      <PanelGroup direction="horizontal" className="min-h-0 flex-1">
+      {/*
+       * Wrap the PanelGroup in a `relative` container so we can absolutely
+       * position the collapse-preview chevron button over the resize
+       * handle at the panel boundary. The button reads `rightSizePct`
+       * (updated live via <Panel onResize>) so its right offset tracks
+       * whatever width the user has dragged the right pane to; when the
+       * pane is collapsed to 0%, the button hugs the viewport's right
+       * edge.
+       */}
+      <div className="relative min-h-0 flex-1">
+      <PanelGroup direction="horizontal" className="h-full">
         <Panel defaultSize={complete ? 55 : 100} minSize={35}>
           {/*
            * Top padding lives on the inner content, NOT on the scroll
@@ -858,7 +929,12 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
           <div className="resize-grip" aria-hidden />
         </PanelResizeHandle>
 
-        <Panel ref={rightPanelRef} defaultSize={complete ? 45 : 0} minSize={0}>
+        <Panel
+          ref={rightPanelRef}
+          defaultSize={complete ? 45 : 0}
+          minSize={0}
+          onResize={(sz) => setRightSizePct(sz)}
+        >
           <div className="flex h-full flex-col p-6">
             <h2
               className="mb-1 text-sm font-semibold uppercase tracking-wide whitespace-nowrap"
@@ -895,6 +971,76 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
           </div>
         </Panel>
       </PanelGroup>
+
+      {/* Preview collapse/expand toggle.
+       *
+       * Position: absolute, `right: {rightSizePct}%`. As the user drags
+       * the split, or as we RAF-animate the panel between 0% and their
+       * last width, this offset tracks the panel boundary continuously
+       * so the button feels welded to the divider.
+       *
+       * Icon: the same rotating chevron used by the accordion headers
+       * (see components/Card.tsx Chevron), rotated -90° when the pane
+       * is expanded ("points right — click to hide") and 90° when
+       * collapsed ("points left — click to show").
+       *
+       * pointer-events: only enabled once the tab has resolved to
+       * `complete` (there's something to hide/show).
+       */}
+      {complete && (
+        <button
+          type="button"
+          onClick={togglePreview}
+          aria-label={
+            previewCollapsed ? 'Show template preview' : 'Hide template preview'
+          }
+          aria-pressed={previewCollapsed}
+          title={
+            previewCollapsed
+              ? 'Show template preview'
+              : 'Hide template preview'
+          }
+          className="cursor-pointer"
+          style={{
+            position: 'absolute',
+            top: '50%',
+            // Nudge the button so its centre sits ON the divider line —
+            // half-width to the left of the right pane's inner edge.
+            right: `calc(${rightSizePct}% - 14px)`,
+            transform: 'translateY(-50%)',
+            zIndex: 5,
+            width: 28,
+            height: 44,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid var(--border-color)',
+            borderRadius: 8,
+            background: 'var(--section-background)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+            color: 'var(--muted-color)',
+            // No transition on `right`: `onResize` fires at 60fps during
+            // both user drag and our RAF animation, so `rightSizePct`
+            // updates each frame — a CSS transition here would lag
+            // behind and cause the button to "float away" from the
+            // moving panel edge.
+            transition:
+              'color 160ms ease, background-color 160ms ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--font-color)'
+            e.currentTarget.style.background =
+              'color-mix(in srgb, var(--classic-blue) 8%, var(--section-background))'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--muted-color)'
+            e.currentTarget.style.background = 'var(--section-background)'
+          }}
+        >
+          <PreviewToggleChevron collapsed={previewCollapsed} />
+        </button>
+      )}
+      </div>
 
       <footer className="action-footer">
         <div className="flex items-center gap-3 px-6 py-3">
@@ -962,6 +1108,34 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
         }
       `}</style>
     </div>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * PreviewToggleChevron — chevron glyph for the preview collapse toggle.
+ * Same SVG path as the accordion Card's Chevron, rotated horizontally.
+ *
+ *   collapsed=false  -90°   points RIGHT  ("click to hide the preview")
+ *   collapsed=true    90°   points LEFT   ("click to show the preview")
+ * ------------------------------------------------------------------------- */
+function PreviewToggleChevron({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      style={{
+        color: 'currentColor',
+        transform: collapsed ? 'rotate(90deg)' : 'rotate(-90deg)',
+        transition: 'transform 220ms cubic-bezier(0.22, 0.7, 0.32, 1)',
+      }}
+    >
+      <path
+        d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+        fill="currentColor"
+      />
+    </svg>
   )
 }
 
