@@ -601,7 +601,7 @@ export function SegmentedPartitionEditor({
         hasFill={hasFill}
       />
 
-      <div ref={listRef} className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {value.map((p, idx) => (
           // Key by partition id ONLY (not id+idx) so React reconciles by
           // identity across reorders — rows keep their DOM nodes across a
