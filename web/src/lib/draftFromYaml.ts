@@ -530,8 +530,15 @@ export function applyOverrides(draft: InteractiveDraft): string {
   }
 
   // disk
+  //
+  // Schema requires `disk.name`. It's meant to be a stable identifier
+  // for the disk configuration; the seed templates (see
+  // image-templates/*.yml) use whatever the image itself is called, or
+  // a fixed sentinel like "Default_ISO". Mirror that: use the image
+  // name so it stays consistent with the top-level `image.name`.
   const diskMiB = Math.max(1, Math.round(draft.disk.sizeGiB * 1024))
   doc.disk = {
+    name: draft.imageName,
     size: formatGiB(draft.disk.sizeGiB),
     partitionTableType: draft.disk.partitionTableType,
     partitions: partitionsToYaml(draft.disk.partitions, diskMiB),
