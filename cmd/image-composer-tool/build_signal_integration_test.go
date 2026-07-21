@@ -37,10 +37,15 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	if _, err := exec.LookPath("losetup"); err != nil {
 		t.Skipf("losetup not available: %v", err)
 	}
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		t.Skipf("pgrep not available: %v", err)
+	}
 
-	// Locate the repo root by walking up from the test file's dir until we
-	// find go.mod. The test binary's working dir differs across Go versions,
-	// so we compute the path deterministically.
+	// Locate the repo root by walking up from the test binary's working
+	// directory until we find go.mod. `go test` runs each package's test
+	// binary with cwd set to that package's source directory, which is
+	// always inside the repo, so walking up finds the module root
+	// deterministically.
 	repoRoot := findRepoRoot(t)
 
 	// Pick a small user template we know builds against Ubuntu 24. The exact
@@ -159,9 +164,11 @@ func TestBuildSIGTERMCleansUpMountsAndLoops(t *testing.T) {
 	}
 }
 
-// findRepoRoot walks up from the test file's directory until it finds a go.mod.
-// Used so subprocess invocations of `go build` and template paths resolve to
-// the repo root regardless of test working directory.
+// findRepoRoot walks up from the test binary's current working directory
+// (which `go test` sets to the package's source directory) until it finds a
+// go.mod. Used so subprocess invocations of `go build` and template paths
+// resolve to the repo root regardless of where the test binary is invoked
+// from within the module.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
