@@ -187,7 +187,18 @@ h3 {
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
-/* WebKit / Blink family — full pseudo-element set. */
+/* WebKit / Blink family — full pseudo-element set.
+ *
+ * Sizing trick: the ::-webkit-scrollbar itself reserves 10 px of layout
+ * space — enough for a wide thumb to fit into on hover — but the visual
+ * thumb width is controlled by a transparent `border` on the thumb
+ * (background-clip: padding-box makes the border truly hollow). So the
+ * VISIBLE thumb is `width − 2×border`, and animating the border width
+ * smoothly shrinks/grows the pill without reflowing the container.
+ *
+ *   default border 3px  → visible thumb 4 px  (thin idle state)
+ *   hover   border 1px  → visible thumb 8 px  (grabbable state)
+ */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -201,27 +212,37 @@ h3 {
   box-shadow: none;
 }
 ::-webkit-scrollbar-thumb {
-  /* Rounded pill in the muted border tone; slightly darker on hover so
-   * it still reads as interactive without a bright track underneath. */
   background: var(--border-color);
   border-radius: 9999px;
-  /* Padding via a transparent border so the thumb looks slimmer than
-   * the 10 px reserved space, matching macOS/iOS scrollbars. */
-  border: 2px solid transparent;
+  border: 3px solid transparent;
   background-clip: padding-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background-color: var(--muted-color);
-  background-clip: padding-box;
+  transition:
+    border-width 160ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    background-color 160ms ease;
 }
 :where(.dark) ::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.18);
   background-clip: padding-box;
 }
-:where(.dark) ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.32);
+
+/* Fatten the thumb when the user hovers the SCROLL CONTAINER (not just the
+ * thumb itself) — so the transition is inviting rather than requiring
+ * precision-hover on a 4 px target. Also brightens the fill for grab-affordance. */
+*:hover > ::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--muted-color);
   background-clip: padding-box;
 }
+:where(.dark) *:hover > ::-webkit-scrollbar-thumb,
+:where(.dark) *:hover::-webkit-scrollbar-thumb,
+:where(.dark) ::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: rgba(255, 255, 255, 0.42);
+  background-clip: padding-box;
+}
+
 /* Kill the step-arrow buttons at both ends of every axis. */
 ::-webkit-scrollbar-button,
 ::-webkit-scrollbar-button:vertical:start:decrement,
