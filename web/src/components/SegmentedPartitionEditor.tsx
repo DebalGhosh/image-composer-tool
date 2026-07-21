@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -482,6 +483,85 @@ export function SegmentedPartitionEditor({
     if (dirty) onChange(next)
   }, [arch, value, onChange])
 
+  /* ---------- FLIP animation on reorder ----------
+   *
+   * When a partition swaps places (via the up/down buttons), we want the
+   * rows to slide to their new positions rather than snap. Classic FLIP:
+   *
+   *   1. Before the value change, capture each row's top offset by id.
+   *   2. React commits the reorder — DOM nodes stay put (we key by id),
+   *      only their DOM order changes so they naturally paint at the new
+   *      positions.
+   *   3. In useLayoutEffect (after DOM update, before paint), read each
+   *      row's new offset and set `transform: translateY(oldTop - newTop)`
+   *      inline. That places each row visually where it USED to be.
+   *   4. Force a reflow, then clear the transform on the same frame with
+   *      a CSS transition — rows glide from old→new.
+   *
+   * Rows carry `background: var(--section-background)` so they're
+   * opaque during the transition; the parent stacking context is a plain
+   * flex column so overlapping mid-animation rows stack cleanly by DOM
+   * order (later rows paint on top). No transparency, no ghosting.
+   */
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const prevOffsetsRef = useRef<Map<string, number>>(new Map())
+  const prevOrderRef = useRef<string[]>([])
+
+  // Capture positions on every render BEFORE React commits, keyed by id.
+  // Using a plain assignment (not an effect) so we always have the last
+  // observed layout snapshot when the next layout effect runs.
+  const currentIds = value.map((p) => p.id)
+  const captureOffsets = () => {
+    const map = new Map<string, number>()
+    for (const id of currentIds) {
+      const el = rowRefs.current[id]
+      if (el) map.set(id, el.getBoundingClientRect().top)
+    }
+    return map
+  }
+
+  useLayoutEffect(() => {
+    // Compare against last known order. If it's a genuine reorder (same
+    // set of ids, different sequence), run the FLIP; on add/remove we
+    // let React's own mount/unmount transitions handle it.
+    const prevIds = prevOrderRef.current
+    const sameSet =
+      prevIds.length === currentIds.length &&
+      prevIds.every((id) => currentIds.includes(id))
+    const reordered =
+      sameSet &&
+      prevIds.some((id, i) => currentIds[i] !== id)
+
+    if (reordered) {
+      const newOffsets = captureOffsets()
+      for (const [id, oldTop] of prevOffsetsRef.current) {
+        const el = rowRefs.current[id]
+        const newTop = newOffsets.get(id)
+        if (!el || newTop === undefined) continue
+        const dy = oldTop - newTop
+        if (Math.abs(dy) < 0.5) continue
+        // Place the row at its old visual position with no transition.
+        el.style.transition = 'none'
+        el.style.transform = `translateY(${dy}px)`
+        // Force a synchronous style flush so the browser doesn't fold
+        // the transform out with the next line's reset. Reading
+        // offsetHeight is the standard trick.
+        void el.offsetHeight
+        // Now animate back to 0.
+        el.style.transition =
+          'transform 260ms cubic-bezier(0.22, 0.7, 0.32, 1)'
+        el.style.transform = 'translateY(0)'
+      }
+    }
+
+    // Snapshot the current post-commit state for the next render.
+    prevOffsetsRef.current = captureOffsets()
+    prevOrderRef.current = currentIds.slice()
+    // Depend on currentIds joined so the effect only runs when the id
+    // sequence actually changes — not on every keystroke inside a row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIds.join('|')])
+
   /* ---------- Rendering ---------- */
 
   return (
@@ -520,21 +600,41 @@ export function SegmentedPartitionEditor({
 
       <div className="flex flex-col gap-3">
         {value.map((p, idx) => (
-          <PartitionRow
-            key={p.id + ':' + idx}
-            index={idx}
-            partition={p}
-            isLast={idx === value.length - 1}
-            diskMiB={diskMiB}
-            usedByOthersMiB={usedMiB - (p.fillRemaining ? 0 : p.sizeMiB)}
-            onChange={(patch) => updateAt(idx, patch)}
-            onDelete={() => removeAt(idx)}
-            onMoveUp={idx > 0 ? () => swap(idx, idx - 1) : undefined}
-            onMoveDown={
-              idx < value.length - 1 ? () => swap(idx, idx + 1) : undefined
-            }
-            onToggleFill={(on) => setFillRemaining(idx, on)}
-          />
+          // Key by partition id ONLY (not id+idx) so React reconciles by
+          // identity across reorders — rows keep their DOM nodes across a
+          // swap, which is what makes the FLIP animation below possible.
+          // The ref-wrapping div lets us measure each row's position
+          // before and after `value` changes and animate the delta.
+          <div
+            key={p.id}
+            ref={(el) => {
+              rowRefs.current[p.id] = el
+            }}
+            style={{
+              // Solid background so mid-animation rows never render as
+              // see-through over their sibling. `willChange: transform`
+              // hints the browser to promote to its own compositor layer
+              // during the animation, avoiding paint bleed between rows.
+              background: 'var(--section-background)',
+              borderRadius: 8,
+              willChange: 'transform',
+            }}
+          >
+            <PartitionRow
+              index={idx}
+              partition={p}
+              isLast={idx === value.length - 1}
+              diskMiB={diskMiB}
+              usedByOthersMiB={usedMiB - (p.fillRemaining ? 0 : p.sizeMiB)}
+              onChange={(patch) => updateAt(idx, patch)}
+              onDelete={() => removeAt(idx)}
+              onMoveUp={idx > 0 ? () => swap(idx, idx - 1) : undefined}
+              onMoveDown={
+                idx < value.length - 1 ? () => swap(idx, idx + 1) : undefined
+              }
+              onToggleFill={(on) => setFillRemaining(idx, on)}
+            />
+          </div>
         ))}
       </div>
 
