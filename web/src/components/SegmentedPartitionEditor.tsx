@@ -967,11 +967,18 @@ function PartitionRow({
             htmlFor={`p-${partition.id}-size`}
           >
             Size
-            <span className="ml-2 font-normal opacity-70">
-              {sliderDisabled
-                ? '(fills remaining)'
-                : formatSize(partition.sizeMiB)}
-            </span>
+            {sliderDisabled ? (
+              <span className="ml-2 font-normal opacity-70">
+                (fills remaining)
+              </span>
+            ) : (
+              <EditableSize
+                valueMiB={partition.sizeMiB}
+                min={roleMin}
+                max={sliderMax}
+                onChange={(miB) => onChange({ sizeMiB: miB })}
+              />
+            )}
           </label>
           <input
             id={`p-${partition.id}-size`}
@@ -1224,6 +1231,86 @@ function presetFor(role: PartitionRole): RolePreset | null {
   return ROLE_PRESETS[role]
 }
 
+/**
+ * Inline editable size label. Renders identically to a passive span
+ * (`ml-2 font-normal opacity-70`) but on focus turns into a bare text
+ * input — no border, no bg, just a blinking caret — matching the
+ * "look the exact same" requirement. Commits on blur / Enter, escapes
+ * on Escape, and clamps to [min, max] on commit.
+ */
+function EditableSize({
+  valueMiB,
+  min,
+  max,
+  onChange,
+}: {
+  valueMiB: number
+  min: number
+  max: number
+  onChange: (miB: number) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<string>('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const displayed = formatSize(valueMiB)
+  // Keep the draft in lockstep with the value while NOT editing so slider
+  // drags always reflect in the field. Once the user focuses, the draft
+  // stops tracking so their in-flight edits aren't clobbered by parent
+  // re-renders from adjacent slider movement.
+  useEffect(() => {
+    if (!editing) setDraft(displayed)
+  }, [displayed, editing])
+
+  const commit = () => {
+    const parsed = parseSize(draft)
+    if (parsed !== null) {
+      const clamped = Math.min(max, Math.max(min, parsed))
+      if (clamped !== valueMiB) onChange(clamped)
+      setDraft(formatSize(clamped))
+    } else {
+      // Roll back an unparseable / empty entry to the last good value.
+      setDraft(formatSize(valueMiB))
+    }
+    setEditing(false)
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      inputMode="text"
+      value={editing ? draft : displayed}
+      // Size scales to content so the field visually replaces the span
+      // exactly, no wider or narrower.
+      size={Math.max(1, (editing ? draft : displayed).length)}
+      aria-label={`Size (editable) — currently ${displayed}`}
+      // Bare-cursor styling: no border, no bg, no ring. The label's own
+      // opacity-70 keeps the color muted-matching-the-original.
+      className="ml-2 cursor-text border-0 bg-transparent p-0 text-inherit font-normal opacity-70 outline-none focus:opacity-100"
+      onFocus={(e) => {
+        setDraft(displayed)
+        setEditing(true)
+        // Select all so first keystroke replaces the value (matches the
+        // slider's numeric-readout affordance in Slider.tsx).
+        e.currentTarget.select()
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+          inputRef.current?.blur()
+        } else if (e.key === 'Escape') {
+          setDraft(displayed)
+          setEditing(false)
+          inputRef.current?.blur()
+        }
+      }}
+    />
+  )
+}
+
 /** Compact human-readable size — MiB, GiB, TiB — for labels on the bar and
  *  slider bounds. Uses 1024-based units to match how ICT reports sizes. */
 function formatSize(miB: number): string {
@@ -1233,4 +1320,38 @@ function formatSize(miB: number): string {
     return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GiB`
   }
   return `${(gib / 1024).toFixed(2)} TiB`
+}
+
+/**
+ * Parse a human-typed size string back to MiB. Accepts:
+ *   "100"          → 100 MiB   (bare number defaults to MiB)
+ *   "100 MiB"      → 100 MiB
+ *   "2G", "2 GiB"  → 2048 MiB
+ *   "0.5 TiB"      → 524288 MiB
+ * Case-insensitive; trailing "B"/"iB" tolerated (GB and GiB both work).
+ * Returns null when the string doesn't parse (caller rolls back to previous
+ * value on null).
+ */
+function parseSize(raw: string): number | null {
+  const s = raw.trim().toUpperCase()
+  if (!s) return null
+  const m = /^(\d+(?:\.\d+)?)\s*([KMGT]?)(?:I?B)?$/.exec(s)
+  if (!m) return null
+  const n = Number.parseFloat(m[1])
+  if (!Number.isFinite(n) || n < 0) return null
+  const unit = m[2]
+  // Everything scales to MiB (1024-based). Bare number = MiB. "K" = KiB
+  // so 1024 K = 1 MiB → n/1024. G/T = ×1024, ×1024² respectively.
+  switch (unit) {
+    case '':
+    case 'M':
+      return Math.round(n)
+    case 'K':
+      return Math.max(0, Math.round(n / 1024))
+    case 'G':
+      return Math.round(n * 1024)
+    case 'T':
+      return Math.round(n * 1024 * 1024)
+  }
+  return null
 }
