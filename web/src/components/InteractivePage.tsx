@@ -480,7 +480,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                   {seedBusy ? 'Loading seed…' : '-- Pick a template to prefill --'}
                 </option>
                 {manifest.combinations.map((c, i) => (
-                  <option key={`${c.template}-${i}`} value={i}>
+                  <option key={`${c.template}-${i}`} value={String(i)}>
                     {seedLabel(i)}
                   </option>
                 ))}
