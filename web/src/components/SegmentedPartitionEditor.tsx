@@ -1261,7 +1261,32 @@ function EditableSize({
     if (!editing) setDraft(displayed)
   }, [displayed, editing])
 
+  // Debounced push while typing. 400 ms after the last keystroke, if the
+  // draft parses cleanly, push a clamped MiB value upstream so the
+  // partition bar / YAML preview / other cards update without waiting on
+  // Enter / blur. On blur / Enter we do a final canonical commit that
+  // rewrites the displayed draft ("4096" → "4 GiB").
+  const debounceRef = useRef<number | null>(null)
+  const cancelDebounce = () => {
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+  }
+  useEffect(() => cancelDebounce, [])
+
+  const scheduleDebouncedPush = (nextDraft: string) => {
+    cancelDebounce()
+    debounceRef.current = window.setTimeout(() => {
+      const parsed = parseSize(nextDraft)
+      if (parsed === null) return
+      const clamped = Math.min(max, Math.max(min, parsed))
+      if (clamped !== valueMiB) onChange(clamped)
+    }, 400)
+  }
+
   const commit = () => {
+    cancelDebounce()
     const parsed = parseSize(draft)
     if (parsed !== null) {
       const clamped = Math.min(max, Math.max(min, parsed))
@@ -1294,7 +1319,10 @@ function EditableSize({
         // slider's numeric-readout affordance in Slider.tsx).
         e.currentTarget.select()
       }}
-      onChange={(e) => setDraft(e.target.value)}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        scheduleDebouncedPush(e.target.value)
+      }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
@@ -1302,6 +1330,7 @@ function EditableSize({
           commit()
           inputRef.current?.blur()
         } else if (e.key === 'Escape') {
+          cancelDebounce()
           setDraft(displayed)
           setEditing(false)
           inputRef.current?.blur()

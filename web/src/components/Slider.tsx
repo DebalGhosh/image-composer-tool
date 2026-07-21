@@ -141,10 +141,15 @@ export function Slider({
 
   // While the readout is focused we keep an unclamped string draft so
   // partial input ("", "1" on the way to "12") doesn't get rewritten out
-  // from under the user. When focus leaves, `commitDraft()` snaps to a
-  // valid slider step and pushes it upstream. Outside the focused window,
-  // the visible value tracks `value` prop exactly — so slider drags update
-  // the readout in real time.
+  // from under the user. Outside the focused window, the visible value
+  // tracks `value` prop exactly — so slider drags update the readout in
+  // real time.
+  //
+  // Debounced auto-commit: 400 ms after the last keystroke we push a
+  // clamped-but-not-snapped value upstream so downstream widgets (YAML
+  // preview, other cards) update without waiting on Enter/blur. On blur
+  // or Enter we do a final snap-to-step commit and also update the
+  // displayed draft so the user sees the canonical value.
   const [draft, setDraft] = useState<string>('')
   const [editing, setEditing] = useState(false)
   useEffect(() => {
@@ -153,7 +158,30 @@ export function Slider({
 
   const readout = format ? format(value) : `${value}${unit ? ' ' + unit : ''}`
 
+  // Debounced push while typing. Clamp only — no snap-to-step yet, or a
+  // step of 1 GiB and a typed "13" would replace the visible field with
+  // "13" mid-word.
+  const debounceRef = useRef<number | null>(null)
+  const cancelDebounce = () => {
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+  }
+  useEffect(() => cancelDebounce, [])
+
+  const scheduleDebouncedPush = (nextDraft: string) => {
+    cancelDebounce()
+    debounceRef.current = window.setTimeout(() => {
+      const parsed = Number(nextDraft.trim())
+      if (!nextDraft.trim() || Number.isNaN(parsed)) return
+      const clamped = Math.min(max, Math.max(min, parsed))
+      if (clamped !== value) onChange(clamped)
+    }, 400)
+  }
+
   const commitDraft = () => {
+    cancelDebounce()
     const parsed = Number(draft.trim())
     if (draft.trim() === '' || Number.isNaN(parsed)) {
       setDraft(String(value)) // roll back invalid entries to the last good value
@@ -209,7 +237,10 @@ export function Slider({
               setDraft(String(value))
               setEditing(true)
             }}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              scheduleDebouncedPush(e.target.value)
+            }}
             onBlur={commitDraft}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -217,6 +248,7 @@ export function Slider({
                 commitDraft()
                 ;(e.target as HTMLInputElement).blur()
               } else if (e.key === 'Escape') {
+                cancelDebounce()
                 setDraft(String(value))
                 setEditing(false)
                 ;(e.target as HTMLInputElement).blur()
