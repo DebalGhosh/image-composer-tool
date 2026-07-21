@@ -90,8 +90,11 @@ function TitleText({
 }) {
   if (titleStyle === 'section') {
     return (
+      // overflow-hidden + min-w-0 lets a `truncate` on any inline child
+      // (e.g. the seed-label suffix in InteractivePage) actually clip
+      // inside the parent flex row instead of spilling past the actions.
       <h2
-        className="m-0 text-xs font-semibold uppercase whitespace-nowrap"
+        className="m-0 min-w-0 overflow-hidden text-xs font-semibold uppercase whitespace-nowrap text-ellipsis"
         style={{
           color: 'var(--title-text)',
           letterSpacing: '0.08em',
@@ -151,12 +154,20 @@ export function Card({
   if (collapsible) {
     const HeaderContent = (
       <>
+        {/*
+         * `min-w-0 flex-1` lets the title box shrink below its intrinsic
+         * content width so any `truncate` inside the title actually clips.
+         * Without min-w-0 the flex container respects the child's
+         * min-content and the title spills past the actions block.
+         */}
         {title ? (
-          <TitleText titleStyle={titleStyle}>{title}</TitleText>
+          <div className="flex min-w-0 flex-1 items-baseline overflow-hidden">
+            <TitleText titleStyle={titleStyle}>{title}</TitleText>
+          </div>
         ) : (
-          <span />
+          <span className="flex-1" />
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {actions && (
             // Clicks on action controls (buttons, toggles) must NOT bubble to
             // the outer <button> that owns the collapse toggle — otherwise
