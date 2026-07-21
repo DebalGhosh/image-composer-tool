@@ -193,18 +193,28 @@ export function Card({
         style={{
           ...VARIANT_STYLES[variant],
           color: 'var(--font-color)',
-          // Clip while animating, release once fully open so descendant
-          // popovers (dropdowns, tooltips) can escape the section bounds.
-          overflow: settledOpen ? 'visible' : 'hidden',
+          // NOTE: no `overflow: hidden` on the outer section. That would
+          // trap the sticky header inside its own bounds — position:sticky
+          // needs a visible scroll ancestor. Content-clipping during the
+          // collapse animation happens on the inner grid-rows wrapper
+          // below, which is fine because rounded corners aren't at risk
+          // (the header + body together still fit within the border-box).
         }}
       >
         <button
           type="button"
           className={
-            'flex w-full cursor-pointer items-center justify-between gap-3 px-5 py-3.5 text-left select-none' +
+            'sticky top-0 z-10 flex w-full cursor-pointer items-center justify-between gap-3 rounded-t-lg px-5 py-3.5 text-left select-none' +
             (open ? ' border-b' : '')
           }
-          style={{ borderColor: 'var(--border-color)' }}
+          style={{
+            // Solid background is essential — the header slides over
+            // scrolled body content and would otherwise show through as
+            // transparent. Match VARIANT_STYLES[variant] so warning cards
+            // still tint correctly.
+            background: VARIANT_STYLES[variant].background,
+            borderColor: 'var(--border-color)',
+          }}
           aria-expanded={open}
           aria-controls={contentId}
           onClick={() => setCollapsed((c) => !c)}
