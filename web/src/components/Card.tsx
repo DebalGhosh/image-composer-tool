@@ -190,7 +190,7 @@ export function Card({
         <button
           type="button"
           className={
-            'flex w-full items-center justify-between gap-3 px-5 py-3.5 text-left select-none' +
+            'flex w-full cursor-pointer items-center justify-between gap-3 px-5 py-3.5 text-left select-none' +
             (open ? ' border-b' : '')
           }
           style={{ borderColor: 'var(--border-color)' }}
