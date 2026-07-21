@@ -403,36 +403,54 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
               packages. The preview on the right re-serializes as you edit.
             </p>
 
-            {/* 1. Seed */}
+            {/* 1. Seed
+             *
+             * Show the current pick right in the accordion header (as an
+             * inline muted label after the "SEED FROM TEMPLATE" heading) so
+             * users see what's loaded without expanding the card, matching
+             * the Advanced tab's always-visible affordance. Reload lives in
+             * the header's `actions` slot for the same reason — clicks stop
+             * bubbling to the header toggle inside the Card component.
+             */}
             <Card
-              title="Seed from template"
               titleStyle="section"
               collapsible
               className="mb-4"
-            >
-              <div className="flex items-stretch gap-2">
-                <NativeSelect
-                  id="interactive-seed"
-                  value={seedPick}
-                  disabled={seedBusy || busy}
-                  onChange={(e) => onSeedChange(e.target.value)}
-                  containerClassName="min-w-0 flex-1"
-                >
-                  <option value="">
-                    {seedBusy ? 'Loading seed…' : '-- Pick a template to prefill --'}
-                  </option>
-                  {manifest.combinations.map((c, i) => (
-                    <option key={`${c.template}-${i}`} value={i}>
-                      {seedLabel(i)}
-                    </option>
-                  ))}
-                </NativeSelect>
+              title={
+                // Wrapped in min-w-0 so the truncate on the seed-label span
+                // can actually clip when the accordion header is narrow.
+                // Otherwise the h2's whitespace-nowrap would let the whole
+                // heading overflow the card horizontally.
+                <span className="inline-flex min-w-0 max-w-full items-baseline gap-2">
+                  <span className="shrink-0">Seed from template</span>
+                  {seedPick && !seedBusy && (
+                    <span
+                      className="min-w-0 truncate font-mono text-[11px] font-normal normal-case tracking-normal opacity-70"
+                      style={{ color: 'var(--muted-color)' }}
+                    >
+                      · {seedLabel(Number(seedPick))}
+                    </span>
+                  )}
+                  {seedBusy && (
+                    <span
+                      className="text-[11px] font-normal normal-case tracking-normal opacity-70"
+                      style={{ color: 'var(--muted-color)' }}
+                    >
+                      · Loading seed…
+                    </span>
+                  )}
+                </span>
+              }
+              actions={
                 <button
                   type="button"
                   onClick={onReloadSeed}
                   disabled={!seedPick || seedBusy || busy}
-                  className="cursor-pointer rounded-md border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
-                  style={{ borderColor: 'var(--border-color)', color: 'var(--font-color)' }}
+                  className="cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    color: 'var(--font-color)',
+                  }}
                   title={
                     seedPick
                       ? 'Discard local edits and reload the selected seed'
@@ -442,7 +460,24 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
                 >
                   ↻ Reload
                 </button>
-              </div>
+              }
+            >
+              <NativeSelect
+                id="interactive-seed"
+                value={seedPick}
+                disabled={seedBusy || busy}
+                onChange={(e) => onSeedChange(e.target.value)}
+                containerClassName="min-w-0"
+              >
+                <option value="">
+                  {seedBusy ? 'Loading seed…' : '-- Pick a template to prefill --'}
+                </option>
+                {manifest.combinations.map((c, i) => (
+                  <option key={`${c.template}-${i}`} value={i}>
+                    {seedLabel(i)}
+                  </option>
+                ))}
+              </NativeSelect>
               {seedPick && !seedBusy && (
                 <p className="mt-2 text-xs" style={{ color: 'var(--muted-color)' }}>
                   Loaded from{' '}
