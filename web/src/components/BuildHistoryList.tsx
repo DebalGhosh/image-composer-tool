@@ -182,7 +182,10 @@ function HistoryRow({
               : 'queued…'}
           </span>
           <StatusBadge status={entry.status} />
-          {/* Right-cluster: Stop (running only) + Delete */}
+          {/* Right-cluster: Stop (running only) + Delete. Both are
+              icon-only, same shape / hit-area — muted colour by default,
+              danger accent on hover. Stop swaps to a small spinner while
+              the cancel request is pending. */}
           {canCancel && (
             <button
               type="button"
@@ -199,16 +202,44 @@ function HistoryRow({
                 }
               }}
               disabled={cancelling}
-              className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 hover:bg-black/5 dark:hover:bg-white/10"
-              style={{
-                borderColor:
-                  'color-mix(in srgb, var(--danger) 40%, var(--border-color))',
-                color: 'var(--danger)',
-              }}
+              className="ml-auto inline-flex cursor-pointer items-center justify-center rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-60 hover:text-[var(--danger)] hover:bg-black/5 dark:hover:bg-white/10"
+              style={{ color: 'var(--muted-color)' }}
               title="Stop the Jenkins build for this row"
               aria-label="Stop build"
             >
-              {cancelling ? 'Stopping…' : '⬛ Stop'}
+              {cancelling ? (
+                <svg
+                  className="h-3.5 w-3.5 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="9"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeOpacity="0.25"
+                  />
+                  <path
+                    d="M12 3a9 9 0 0 1 9 9"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-3.5 w-3.5"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                </svg>
+              )}
             </button>
           )}
           <button
