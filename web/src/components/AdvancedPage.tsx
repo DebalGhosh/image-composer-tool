@@ -9,7 +9,6 @@ import { YamlEditor } from './YamlEditor'
 
 interface AdvancedPageProps {
   onBuildStarted: (buildId: string, yaml?: string) => void
-  buildInProgress: boolean
 }
 
 // Tokens that ship in the reference templates as "fill me in" markers. If any
@@ -54,7 +53,7 @@ function validateYaml(text: string): YamlValidity {
   }
 }
 
-export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPageProps) {
+export function AdvancedPage({ onBuildStarted }: AdvancedPageProps) {
   const manifest = useStore((s) => s.manifest)
   const yaml = useStore((s) => s.advancedYaml)
   const setYaml = useStore((s) => s.setAdvancedYaml)
@@ -88,7 +87,6 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
     !invalid &&
     !blockedByPlaceholders &&
     !busy &&
-    !buildInProgress &&
     !seedBusy
 
   const seedLabel = (i: number): string => {
@@ -356,14 +354,14 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
             disabled={!canBuild}
             onClick={onBuild}
           >
-            {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+            {busy ? 'Starting…' : 'Build Image'}
           </button>
-          {empty && !buildInProgress && (
+          {empty && (
             <span className="text-sm text-[var(--muted-color)]">
               Paste template YAML to build.
             </span>
           )}
-          {!empty && invalid && !buildInProgress && (
+          {!empty && invalid && (
             <span className="text-sm" style={{ color: 'var(--danger)' }}>
               Fix the YAML syntax error to build.
             </span>
@@ -376,11 +374,6 @@ export function AdvancedPage({ onBuildStarted, buildInProgress }: AdvancedPagePr
           {!empty && !invalid && !tooLarge && blockedByPlaceholders && (
             <span className="text-sm" style={{ color: 'var(--warning)' }}>
               Resolve placeholders or acknowledge the override to build.
-            </span>
-          )}
-          {buildInProgress && (
-            <span className="text-sm" style={{ color: 'var(--warning)' }}>
-              A build is already in progress. Switch to the Monitor Builds tab to watch it.
             </span>
           )}
         </div>

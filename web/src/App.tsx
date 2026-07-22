@@ -222,19 +222,16 @@ export default function App() {
           <div hidden={view !== 'basic'}>
             <BasicPage
               onBuildStarted={onBuildStarted}
-              buildInProgress={buildStatus === 'running'}
             />
           </div>
           <div hidden={view !== 'advanced'}>
             <AdvancedPage
               onBuildStarted={onBuildStarted}
-              buildInProgress={buildStatus === 'running'}
             />
           </div>
           <div hidden={view !== 'interactive'}>
             <InteractivePage
               onBuildStarted={onBuildStarted}
-              buildInProgress={buildStatus === 'running'}
             />
           </div>
           <div hidden={view !== 'builds'}>

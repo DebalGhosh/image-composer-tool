@@ -58,7 +58,6 @@ import { applyOverrides, parseYamlToDraft } from '../lib/draftFromYaml'
 
 interface InteractivePageProps {
   onBuildStarted: (buildId: string, yaml?: string) => void
-  buildInProgress: boolean
 }
 
 /* ------------------------------------------------------------------------- *
@@ -132,7 +131,7 @@ const IMAGE_NAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$/
  * InteractivePage
  * ------------------------------------------------------------------------- */
 
-export function InteractivePage({ onBuildStarted, buildInProgress }: InteractivePageProps) {
+export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
   const manifest = useStore((s) => s.manifest)
   const storeDraft = useStore((s) => s.interactiveDraft)
   const setDraft = useStore((s) => s.setInteractiveDraft)
@@ -401,7 +400,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
   /* -------------------- Build action --------------------------------------- */
 
   const onBuild = async () => {
-    if (!complete || busy || buildInProgress) return
+    if (!complete || busy) return
     if (!memoedYaml) {
       toast.danger('Preview YAML is empty — cannot build.', {
         title: 'Build failed to start',
@@ -1084,19 +1083,14 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
           <button
             className="cursor-pointer rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--metrics-gradient)' }}
-            disabled={!complete || busy || buildInProgress}
+            disabled={!complete || busy}
             onClick={onBuild}
           >
-            {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+            {busy ? 'Starting…' : 'Build Image'}
           </button>
-          {!complete && !buildInProgress && (
+          {!complete && (
             <span className="text-sm text-[var(--muted-color)]">
               Complete all selections to build.
-            </span>
-          )}
-          {buildInProgress && (
-            <span className="text-sm" style={{ color: 'var(--warning)' }}>
-              A build is already in progress. Switch to the Monitor Builds tab to watch it.
             </span>
           )}
         </div>

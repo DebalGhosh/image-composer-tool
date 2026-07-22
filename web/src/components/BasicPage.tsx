@@ -16,10 +16,9 @@ import { Collapsible } from './Collapsible'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string, yaml?: string) => void
-  buildInProgress: boolean
 }
 
-export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
+export function BasicPage({ onBuildStarted }: BasicPageProps) {
   const manifest = useStore((s) => s.manifest)
   const selection = useStore((s) => s.selection)
   const setField = useStore((s) => s.setField)
@@ -341,19 +340,14 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           <button
             className="rounded-md px-5 py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: 'var(--metrics-gradient)' }}
-            disabled={!complete || busy || buildInProgress}
+            disabled={!complete || busy}
             onClick={onBuild}
           >
-            {busy ? 'Starting…' : buildInProgress ? 'Build in progress…' : 'Build Image'}
+            {busy ? 'Starting…' : 'Build Image'}
           </button>
-          {!complete && !buildInProgress && (
+          {!complete && (
             <span className="text-sm text-[var(--muted-color)]">
               Complete all selections to build.
-            </span>
-          )}
-          {buildInProgress && (
-            <span className="text-sm" style={{ color: 'var(--warning)' }}>
-              A build is already in progress. Switch to the Monitor Builds tab to watch it.
             </span>
           )}
         </div>
