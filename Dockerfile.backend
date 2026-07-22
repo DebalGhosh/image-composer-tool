@@ -1,0 +1,107 @@
+# syntax=docker/dockerfile:1.7
+# ICT web UI — backend container.
+#
+# Runs `image-composer-tool serve` in "Jenkins-dispatch" mode. The container
+# never spawns a local ICT build (which would need mount/losetup/mkfs/...);
+# every dispatch fans out to a Jenkins worker via the /api/v1/jenkins/dispatch
+# endpoint. That keeps this image small and non-privileged.
+#
+# Two build stages:
+#   1. golang:1.25 — go build with vendor caches
+#   2. debian:12-slim — thin runtime with ca-certificates + tini
+#
+# Not distroless. The Go binary is happy in distroless, but:
+#   * The config loader (LoadGlobalConfig) opens image-composer-tool.yml + a
+#     writable log file on disk.
+#   * Intel-network HTTPS to Jenkins wants the full Debian ca-certificates
+#     bundle so corporate MITM certs verify cleanly.
+#   * If anything goes sideways in prod we want `docker exec sh` to work.
+#
+# Build:
+#   docker build -f Dockerfile.backend -t ict-ui-backend .
+# Run (see docker-compose.yml for the recommended shape):
+#   docker run --rm -p 8080:8080 --env-file .env ict-ui-backend
+
+########## Stage 1: build the Go binary ########################################
+
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /src
+
+# Prime the module cache in its own layer so subsequent source changes don't
+# re-download deps. --mount=type=cache keeps GOPATH/pkg warm across builds.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+# Static linking so the binary drops cleanly into a slim base without needing
+# a matching glibc. CGO stays off — no cgo dependencies in this codebase.
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build \
+        -trimpath \
+        -ldflags="-s -w" \
+        -o /out/image-composer-tool \
+        ./cmd/image-composer-tool
+
+########## Stage 2: thin runtime ###############################################
+
+FROM debian:12-slim AS runtime
+
+# tini as PID 1 so SIGTERM propagates to the Go server (which currently
+# doesn't call signal.Notify itself — see internal/api/server.go). Without
+# tini a `docker stop` on a container with in-flight SSE streams gets
+# SIGKILLed after the default 10s grace.
+#
+# curl is only useful for HEALTHCHECK — the healthcheck below uses it.
+# ca-certificates is needed for HTTPS to Jenkins.
+RUN --mount=type=cache,target=/var/cache/apt \
+    --mount=type=cache,target=/var/lib/apt \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        tini \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user. UID/GID 10001 is out of the way of most host uid ranges.
+RUN groupadd -g 10001 ict && \
+    useradd  -u 10001 -g 10001 -m -s /bin/sh ict
+
+# Copy the built binary + the runtime config file. image-templates/ is bundled
+# too because the backend serves them by disk path (--templates-dir). The
+# embedded SPA (internal/webui/dist) is already inside the Go binary via
+# //go:embed — we don't need to copy web/dist here.
+COPY --from=build /out/image-composer-tool /usr/local/bin/image-composer-tool
+COPY --chown=ict:ict image-composer-tool.yml /app/image-composer-tool.yml
+COPY --chown=ict:ict image-templates       /app/image-templates
+
+# Per-build work/cache dirs. The dispatch-only path only writes template.yml
+# and the tracker's log buffer — small, ephemeral. Mount a volume here in
+# compose if you want the work dirs to survive container restart.
+RUN mkdir -p /app/webui-workspace /app/logs && \
+    chown -R ict:ict /app
+
+USER ict
+WORKDIR /app
+
+# ports: --host 0.0.0.0 so the port is reachable from outside the container.
+# 127.0.0.1 (the default) makes port-forwarding a no-op.
+EXPOSE 8080
+
+# Health: manifest endpoint is a cheap in-memory read; returns 200 as long as
+# the server can accept connections and reply. --fail flips a non-2xx into a
+# non-zero exit so Docker's healthcheck actually detects failures.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl --fail --silent --show-error \
+        http://127.0.0.1:8080/api/v1/manifest > /dev/null || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["image-composer-tool", "serve", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--templates-dir", "/app/image-templates", \
+     "--work-dir", "/app/webui-workspace"]

@@ -1,0 +1,86 @@
+# ICT web UI — two-container deployment.
+#
+# Backend + frontend wired via a user-defined bridge network so the nginx
+# reverse-proxy can reach the Go server by service name (`backend`).
+# Only the frontend port is published to the host — the backend stays on
+# the internal network.
+#
+# Bring up:
+#   1. cp .env.example .env    # then fill in JENKINS_TOKEN etc.
+#   2. docker compose build
+#   3. docker compose up -d
+#   4. open http://localhost:5173
+#
+# Stop:
+#   docker compose down                 # keep the workspace volume
+#   docker compose down --volumes       # nuke the workspace too
+
+# ------------------------------------------------------------------------------
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: ict-ui-backend:local
+    # NOT published to the host — the frontend proxies into it over the
+    # ict-ui network. If you want to hit the backend directly (curl, dev
+    # tooling), uncomment `ports:` below.
+    # ports:
+    #   - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # These are read from the shell / env_file at compose time. Kept
+      # here so the required list is obvious. Missing JENKINS_* variables
+      # make the /api/v1/jenkins/dispatch endpoint return 503, which the
+      # frontend surfaces as a clear error.
+      JENKINS_URL:          ${JENKINS_URL:-}
+      JENKINS_USER:         ${JENKINS_USER:-}
+      JENKINS_TOKEN:        ${JENKINS_TOKEN:-}
+      JENKINS_WORKERS_PATH: ${JENKINS_WORKERS_PATH:-ict-farm/workers}
+      # Proxy passthrough for Intel network. If unset in .env these
+      # simply propagate empty and Go's http.Transport uses the direct
+      # route — safe default.
+      HTTP_PROXY:  ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY:    ${NO_PROXY:-}
+    volumes:
+      # Persist per-build workspace state (template.yml, log buffers)
+      # across container restarts. Ephemeral in the dispatch-only path,
+      # but nice-to-have during triage.
+      - ict-workspace:/app/webui-workspace
+    networks:
+      - ict-ui
+    restart: unless-stopped
+    # 30s so the server can drain SSE streams before Docker escalates
+    # to SIGKILL. Once we add signal.Notify + srv.Shutdown() in
+    # internal/api/server.go this can drop to 10s.
+    stop_grace_period: 30s
+    # Healthcheck is baked into the Dockerfile; declaring it here would
+    # be redundant. depends_on below waits for `service_healthy`.
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: ict-ui-frontend:local
+    ports:
+      # Host:container. Change the left side if 5173 collides on your
+      # host (the Vite dev-server default). Container-side is fixed at
+      # 8080 because nginx-unprivileged listens there.
+      - "5173:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ict-ui
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+networks:
+  ict-ui:
+    driver: bridge
+
+volumes:
+  ict-workspace:

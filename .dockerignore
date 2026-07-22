@@ -1,0 +1,35 @@
+# Anything the container builds don't need — keeps the daemon send
+# fast and shrinks the layer cache.
+
+# Locally-built artifacts (the Docker build re-produces them).
+build/
+webui-workspace/
+workspace/
+cache/
+tmp/
+
+# Frontend node/vite artifacts. `web/node_modules` is huge; the
+# Dockerfile.frontend runs `npm ci` inside its own build stage.
+web/node_modules/
+web/dist/
+
+# VCS.
+.git/
+.gitignore
+
+# Editor / IDE.
+.vscode/
+.idea/
+
+# Secrets — never bake these into the image.
+.env
+.env.*
+!.env.example
+
+# Ephemeral logs.
+*.log
+
+# Ephemeral test / debug outputs.
+failure-logs/
+upload/
+parameters/
