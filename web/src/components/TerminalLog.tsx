@@ -3,64 +3,43 @@ import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { useStore } from '../store'
 
 interface TerminalLogProps {
   logs: string[]
   className?: string
 }
 
-// Themes that read the CSS custom properties the rest of the app uses, so
-// light/dark mode flips the terminal too. Kept minimal -- xterm gives us
-// full ANSI 256-color rendering out of the box; we just supply the base
-// palette.
-function themeFor(mode: 'dark' | 'light'): ITheme {
-  if (mode === 'dark') {
-    return {
-      background: '#0b1220',
-      foreground: '#e5eefc',
-      cursor: '#7cc4ff',
-      selectionBackground: '#2f4a7a',
-      black: '#0b1220',
-      red: '#ff6b6b',
-      green: '#5ee0a0',
-      yellow: '#f7c948',
-      blue: '#7cc4ff',
-      magenta: '#c792ea',
-      cyan: '#5ce6d0',
-      white: '#e5eefc',
-      brightBlack: '#4a5670',
-      brightRed: '#ff8a8a',
-      brightGreen: '#7ee8b0',
-      brightYellow: '#ffd77a',
-      brightBlue: '#a3d6ff',
-      brightMagenta: '#dbb0f0',
-      brightCyan: '#8de6d8',
-      brightWhite: '#ffffff',
-    }
-  }
-  return {
-    background: '#f8fafc',
-    foreground: '#0f172a',
-    cursor: '#1d4ed8',
-    selectionBackground: '#c7d2fe',
-    black: '#111827',
-    red: '#b91c1c',
-    green: '#047857',
-    yellow: '#a16207',
-    blue: '#1d4ed8',
-    magenta: '#7c3aed',
-    cyan: '#0e7490',
-    white: '#0f172a',
-    brightBlack: '#475569',
-    brightRed: '#dc2626',
-    brightGreen: '#059669',
-    brightYellow: '#ca8a04',
-    brightBlue: '#2563eb',
-    brightMagenta: '#9333ea',
-    brightCyan: '#0891b2',
-    brightWhite: '#0f172a',
-  }
+// Terminal is ALWAYS dark, in both light and dark app themes. CLI output is a
+// long-established convention: operators read build logs against a dark
+// surface regardless of the surrounding UI's brightness. Flipping the log
+// pane to a light theme when the app is in light mode makes ANSI colors
+// (especially yellows and greens) unreadable and breaks convention.
+//
+// Palette is tuned to match the app's vscode-dark YAML editor (background
+// #1e1e1e, foreground ~#d4d4d4) so terminal + code editor read as ONE
+// surface family. ANSI colors are picked to have good contrast against
+// #1e1e1e without being too saturated.
+const TERMINAL_THEME: ITheme = {
+  background: '#1e1e1e',
+  foreground: '#d4d4d4',
+  cursor: '#7cc4ff',
+  selectionBackground: '#264f78',
+  black: '#1e1e1e',
+  red: '#f28b82',
+  green: '#8bd17c',
+  yellow: '#e2c08d',
+  blue: '#7cc4ff',
+  magenta: '#c792ea',
+  cyan: '#4ec9b0',
+  white: '#d4d4d4',
+  brightBlack: '#6a6a6a',
+  brightRed: '#ff9a9a',
+  brightGreen: '#a3e0a0',
+  brightYellow: '#ffd77a',
+  brightBlue: '#a3d6ff',
+  brightMagenta: '#dbb0f0',
+  brightCyan: '#8de6d8',
+  brightWhite: '#ffffff',
 }
 
 // Jenkins wraps its per-line audit metadata in an SGR-8 concealed block:
@@ -80,9 +59,10 @@ export function TerminalLog({ logs, className }: TerminalLogProps) {
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const writtenRef = useRef(0)
-  const theme = useStore((s) => s.theme)
 
-  // Create the terminal once. Theme + logs are handled by the effects below.
+  // Create the terminal once. Logs are handled by the effect below; no
+  // theme effect exists anymore because TERMINAL_THEME is a module-level
+  // constant (terminal stays dark in both app themes on purpose).
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -96,7 +76,7 @@ export function TerminalLog({ logs, className }: TerminalLogProps) {
       lineHeight: 1.3,
       scrollback: 10000,      // ICT builds emit tens of thousands of lines
       allowProposedApi: true,
-      theme: themeFor(theme),
+      theme: TERMINAL_THEME,
     })
 
     const fit = new FitAddon()
@@ -161,13 +141,6 @@ export function TerminalLog({ logs, className }: TerminalLogProps) {
     // Keep the view pinned to the newest line.
     term.scrollToBottom()
   }, [logs])
-
-  // Live theme switching.
-  useEffect(() => {
-    const term = termRef.current
-    if (!term) return
-    term.options.theme = themeFor(theme)
-  }, [theme])
 
   return (
     <div

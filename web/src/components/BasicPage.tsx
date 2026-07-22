@@ -353,7 +353,7 @@ export function BasicPage({ onBuildStarted, buildInProgress }: BasicPageProps) {
           )}
           {buildInProgress && (
             <span className="text-sm" style={{ color: 'var(--warning)' }}>
-              A build is already in progress. Switch to the Build Image tab to monitor it.
+              A build is already in progress. Switch to the Monitor Builds tab to watch it.
             </span>
           )}
         </div>

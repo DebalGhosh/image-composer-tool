@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import type { Theme } from '../store'
 
 type View = 'basic' | 'advanced' | 'interactive' | 'builds'
-type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
+type BuildStatus = 'idle' | 'running' | 'success' | 'failed' | 'cancelled'
 
 interface HeaderProps {
   view: View
@@ -16,7 +16,7 @@ const tabs: { id: View; label: string }[] = [
   { id: 'basic', label: 'Basic' },
   { id: 'advanced', label: 'Advanced' },
   { id: 'interactive', label: 'Interactive' },
-  { id: 'builds', label: 'Build Image' },
+  { id: 'builds', label: 'Monitor Builds' },
 ]
 
 export function Header({
@@ -142,6 +142,7 @@ function BuildIndicator({
     running: { color: 'bg-[var(--warning)]', pulse: true, label: 'Build in progress' },
     success: { color: 'bg-[var(--success)]', pulse: false, label: 'Build completed' },
     failed: { color: 'bg-[var(--danger)]', pulse: false, label: 'Build failed' },
+    cancelled: { color: 'bg-[var(--muted-color)]', pulse: false, label: 'Build cancelled' },
   }[status]
   return (
     <button

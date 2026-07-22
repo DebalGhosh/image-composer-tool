@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 type CardVariant = 'default' | 'warning'
 type CardTitleStyle = 'default' | 'section'
@@ -36,6 +36,19 @@ interface CardProps {
   collapsible?: boolean
   /** Only meaningful with `collapsible`. Defaults to expanded (false). */
   defaultCollapsed?: boolean
+  /**
+   * When true (and `collapsible` also true), the card expands on
+   * mouse-enter over the section and collapses on mouse-leave — click
+   * on the header does NOT toggle. A small 120 ms close delay swallows
+   * accidental pointer flickers across the section boundary. The chevron
+   * still rotates to reflect the current state so the affordance is
+   * consistent with the click-driven variant. Actions in the header
+   * remain fully clickable (their onClick stop-propagates as before).
+   *
+   * The default collapse animation duration and open-state behaviour
+   * are identical to the click-driven mode; only the trigger changes.
+   */
+  expandOnHover?: boolean
   children: ReactNode
 }
 
@@ -122,11 +135,30 @@ export function Card({
   className = '',
   collapsible = false,
   defaultCollapsed = false,
+  expandOnHover = false,
   children,
 }: CardProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  // In hover mode the card starts collapsed and only opens while the
+  // pointer is over it; the click-driven default respects
+  // `defaultCollapsed`.
+  const [collapsed, setCollapsed] = useState(
+    expandOnHover ? true : defaultCollapsed,
+  )
   const contentId = useId()
   const open = !collapsible || !collapsed
+
+  // Close-delay timer for hover mode. Small 120 ms grace period so a brief
+  // pointer excursion across the section boundary (e.g. hitting the
+  // resize handle at the divider, or the mouse jittering on the edge)
+  // doesn't slam the card shut.
+  const hoverCloseTimer = useRef<number | null>(null)
+  const cancelHoverClose = () => {
+    if (hoverCloseTimer.current !== null) {
+      window.clearTimeout(hoverCloseTimer.current)
+      hoverCloseTimer.current = null
+    }
+  }
+  useEffect(() => cancelHoverClose, [])
 
   // While the height animation is running, the body must be clipped or the
   // content briefly overflows the collapsed row. Once the animation settles,
@@ -200,6 +232,25 @@ export function Card({
           // below, which is fine because rounded corners aren't at risk
           // (the header + body together still fit within the border-box).
         }}
+        onMouseEnter={
+          expandOnHover
+            ? () => {
+                cancelHoverClose()
+                setCollapsed(false)
+              }
+            : undefined
+        }
+        onMouseLeave={
+          expandOnHover
+            ? () => {
+                cancelHoverClose()
+                hoverCloseTimer.current = window.setTimeout(() => {
+                  setCollapsed(true)
+                  hoverCloseTimer.current = null
+                }, 120)
+              }
+            : undefined
+        }
       >
         <button
           type="button"
@@ -209,7 +260,10 @@ export function Card({
             // Segmented radios' pill+labels are the concrete example, but
             // this also covers any future in-body absolutely-positioned
             // affordances that need to layer over their own siblings.
-            'sticky top-0 z-20 flex w-full cursor-pointer items-center justify-between gap-3 rounded-t-lg px-5 py-3.5 text-left select-none' +
+            // In hover mode the header isn't a click affordance, so the
+            // pointer stays as `default` there.
+            'sticky top-0 z-20 flex w-full items-center justify-between gap-3 rounded-t-lg px-5 py-3.5 text-left select-none' +
+            (expandOnHover ? '' : ' cursor-pointer') +
             (open ? ' border-b' : '')
           }
           style={{
@@ -222,7 +276,15 @@ export function Card({
           }}
           aria-expanded={open}
           aria-controls={contentId}
-          onClick={() => setCollapsed((c) => !c)}
+          // Click-to-toggle is disabled in hover mode: the whole card is
+          // the affordance, and mixing click+hover on the same element
+          // makes the state-machine surprising (a hover-out mid-click
+          // would fight the click). Keyboard users can still expand via
+          // focus-within if we ever add tab-focus support; for now hover
+          // mode is a pointer-only affordance by design.
+          onClick={
+            expandOnHover ? undefined : () => setCollapsed((c) => !c)
+          }
         >
           {HeaderContent}
         </button>

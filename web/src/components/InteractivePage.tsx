@@ -22,7 +22,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
 } from 'react'
 import {
   Panel,
@@ -30,10 +29,9 @@ import {
   PanelResizeHandle,
   type ImperativePanelHandle,
 } from 'react-resizable-panels'
-import MiniSearch from 'minisearch'
 import { useStore, useToast, type InteractiveDraft, type UserConfig } from '../store'
 import { api } from '../api/client'
-import type { ComposeRequest, PackageEntry } from '../api/types'
+import type { ComposeRequest } from '../api/types'
 import { Card } from './Card'
 import { Collapsible } from './Collapsible'
 import { Combobox, type ComboboxItem } from './Combobox'
@@ -54,7 +52,6 @@ import {
   type Arch,
   type Partition,
 } from './SegmentedPartitionEditor'
-import { YamlEditor } from './YamlEditor'
 import { PackageSearchCombobox } from './PackageSearchCombobox'
 import { InteractiveYamlPreview } from './InteractiveYamlPreview'
 import { applyOverrides, parseYamlToDraft } from '../lib/draftFromYaml'
@@ -1099,7 +1096,7 @@ export function InteractivePage({ onBuildStarted, buildInProgress }: Interactive
           )}
           {buildInProgress && (
             <span className="text-sm" style={{ color: 'var(--warning)' }}>
-              A build is already in progress. Switch to the Build Image tab to monitor it.
+              A build is already in progress. Switch to the Monitor Builds tab to watch it.
             </span>
           )}
         </div>

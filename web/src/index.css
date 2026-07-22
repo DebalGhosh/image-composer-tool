@@ -77,6 +77,17 @@
   --input-background: #1e1f22;
   --danger-fg: #ff8590;
 
+  /*
+   * Accent shift for dark mode. Light-mode --classic-blue (#0054ae, deep
+   * navy) is near-black against --section-background #242528 — hyperlinks
+   * and every other accented element read as unlit. Shift to the brighter
+   * Tine-1 (#0099ec, sky blue) which is the standard Intel palette
+   * counterpart for dark surfaces. Every consumer (hyperlinks, focus
+   * rings, sliders, sliding-pill Segmented, seed indicator chip, ...)
+   * picks it up automatically via var(--classic-blue).
+   */
+  --classic-blue: #0099ec;
+
   --toast-danger-bg: rgba(200, 19, 38, 0.15);
   --toast-success-bg: rgba(78, 159, 15, 0.18);
   --toast-warning-bg: rgba(201, 143, 0, 0.18);

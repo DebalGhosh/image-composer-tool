@@ -34,6 +34,12 @@ func (s *Server) routes() *http.ServeMux {
 	// routes above because Jenkins-dispatched builds share the same tracker.
 	mux.HandleFunc("POST /api/v1/jenkins/dispatch", s.handleJenkinsDispatch)
 
+	// Cancel a running Jenkins-dispatched build. POSTs Jenkins' graceful
+	// /stop and marks the local tracker entry as cancelled so the UI's
+	// status pill flips immediately (Jenkins takes a few seconds to
+	// actually shut the worker down).
+	mux.HandleFunc("POST /api/v1/builds/{id}/cancel", s.handleCancelBuild)
+
 	// Web UI: serve the embedded SPA at the root. API routes above are more
 	// specific and take precedence in the mux. Only mounted when a real build is
 	// embedded; otherwise the UI is served by the Vite dev server.

@@ -6,25 +6,44 @@ import { Card } from './Card'
 import { SummaryPanel } from './SummaryPanel'
 import { TerminalLog } from './TerminalLog'
 
-type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
+type BuildStatus = 'idle' | 'running' | 'success' | 'failed' | 'cancelled'
 
 interface BuildViewProps {
   buildId: string
   onRetry: () => Promise<void>
   retrying: boolean
   onStatusChange: (s: BuildStatus) => void
+  /**
+   * Optional — called ONCE per mount when the polling details fetch
+   * first returns non-empty jenkins.worker AND jenkins.buildNumber.
+   * The parent updates the corresponding history entry. Fires at most
+   * once per BuildView lifetime; ignored if the parent didn't pass it.
+   * The third argument is the specific build URL (null if unavailable);
+   * lets the history-list row link directly at the build, not just the
+   * job.
+   */
+  onJenkinsMetaReady?: (
+    worker: string,
+    buildNo: number,
+    buildUrl: string | null,
+  ) => void
 }
 
 // Full MVP-1 build lifecycle. "not-started" is represented by not rendering this
 // component at all; once a build exists it moves through the states below.
 type Status = 'running' | 'cancelling' | 'cancelled' | 'success' | 'failed'
 
-export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildViewProps) {
+export function BuildView({
+  buildId,
+  onRetry,
+  retrying,
+  onStatusChange,
+  onJenkinsMetaReady,
+}: BuildViewProps) {
   const [logs, setLogs] = useState<string[]>([])
   const [status, setStatus] = useState<Status>('running')
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [details, setDetails] = useState<BuildDetails | null>(null)
-  const [detailsOpen, setDetailsOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const terminalWrapRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
@@ -59,7 +78,6 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
     setStatus('running')
     setArtifacts([])
     setDetails(null)
-    setDetailsOpen(false)
 
     // Fetch build details on mount, then poll every 5 s until we've seen
     // both a Jenkins buildNumber AND the Artifactory URL. The URL only
@@ -68,10 +86,29 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
     // The interval is cheap (a JSON GET against localhost) and stops as
     // soon as the URL lands or the SSE stream reports a terminal state.
     let stopPolling = false
+    // Jenkins queue-item resolution happens asynchronously — the first few
+    // polls may return worker='' buildNumber=0. Fire the ready callback
+    // EXACTLY ONCE per mount when both become populated, so the URL
+    // acquires the deep-link fields the moment they're known.
+    let notifiedMeta = false
     const pollDetails = async () => {
       try {
         const d = await api.buildDetails(buildId)
         setDetails(d)
+        if (
+          !notifiedMeta &&
+          onJenkinsMetaReady &&
+          d.jenkins?.worker &&
+          d.jenkins.buildNumber &&
+          d.jenkins.buildNumber > 0
+        ) {
+          notifiedMeta = true
+          onJenkinsMetaReady(
+            d.jenkins.worker,
+            d.jenkins.buildNumber,
+            d.jenkins.buildUrl ?? null,
+          )
+        }
         if (d.jenkins?.artifactoryUrl) return // done; stop scheduling
       } catch {
         /* transient, keep polling */
@@ -121,7 +158,7 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
         if (s === 'failed' && data.message) {
           toast.danger(String(data.message), { title: 'Build failed', duration: 0 })
         }
-        onStatusChange('failed')
+        onStatusChange(s)
       } catch {
         setStatus('failed')
         onStatusChange('failed')
@@ -133,6 +170,12 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
       stopPolling = true
       es.close()
     }
+    // Intentionally depend only on buildId: the SSE stream + poll should
+    // restart when the build we're viewing changes, not when the parent
+    // happens to pass a fresh callback identity. onJenkinsMetaReady is
+    // wrapped in useCallback([]) upstream so its identity is stable
+    // anyway, but this keeps the effect's contract clear.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildId])
 
   const copyLogs = () => navigator.clipboard.writeText(logs.join('\n'))
@@ -149,264 +192,387 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <Card
-        title={
-          <span className="flex items-center gap-3">
-            Build Status
-            <StatusBadge status={status} />
-            {details?.jenkins?.worker && (
-              <span
-                className="rounded px-2 py-0.5 text-[11px] font-medium"
-                style={{
-                  background: 'color-mix(in srgb, var(--classic-blue) 12%, transparent)',
-                  color: 'var(--classic-blue)',
-                }}
-                title="Worker Jenkins picked for this build"
-              >
-                {details.jenkins.worker}
-                {details.jenkins.buildNumber ? ` · #${details.jenkins.buildNumber}` : ''}
-              </span>
-            )}
-          </span>
-        }
-        actions={
-          <div className="flex items-center gap-2">
-            {(details?.jenkins?.buildUrl || details?.jenkins?.jobUrl) && (
-              <a
-                className="rounded border px-3 py-1 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10"
-                style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
-                href={details.jenkins.buildUrl || details.jenkins.jobUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open the running build (or the worker job) in Jenkins"
-              >
-                ↗ View in Jenkins
-              </a>
-            )}
-            {(status === 'failed' || status === 'cancelled') && (
-              <button
-                className="rounded border px-3 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
-                style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
-                disabled={retrying}
-                onClick={onRetry}
-              >
-                {retrying ? 'Starting…' : '↺ Retry build'}
-              </button>
-            )}
-          </div>
-        }
-        className="flex-none"
-      >
-
-      {/* Failure message is surfaced via toast.danger from the SSE 'error' handler,
-          so we don't render an inline red banner here anymore. */}
-
-      {/* Collapsible troubleshoot panel: the exact command, the resolved template
-          (downloadable), and the per-build work/cache directories. Collapsed by
-          default so it doesn't compete with the log for space. */}
-      {details && (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {/*
+       * Compact status strip. What used to live in a dedicated Build
+       * Status card now spreads across two places:
+       *   - the corresponding history row (worker chip, status pill,
+       *     Jenkins link) in BuildHistoryList
+       *   - this inline strip which surfaces the Retry affordance
+       *     when the terminal state is failed/cancelled. Kept here
+       *     because retry needs `lastYamlRef`, which is scoped to
+       *     the App-level dispatch state, not the history entry.
+       */}
+      {(status === 'failed' || status === 'cancelled') && (
         <div
-          className="rounded-md border"
+          className="flex-none rounded-md border p-3 text-xs"
           style={{
-            borderColor: 'var(--border-color)',
-            background: 'color-mix(in srgb, var(--page-background) 60%, var(--section-background))',
+            borderColor:
+              'color-mix(in srgb, var(--danger) 45%, var(--border-color))',
+            background:
+              'color-mix(in srgb, var(--danger) 6%, var(--section-background))',
+            color: 'var(--font-color)',
           }}
         >
-          <button
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/10"
-            style={{ color: 'var(--muted-color)' }}
-            onClick={() => setDetailsOpen((o) => !o)}
-            aria-expanded={detailsOpen}
-          >
-            <span style={{ color: 'var(--muted-color)' }}>{detailsOpen ? '▼' : '▶'}</span>
-            Build details
-            <span className="font-normal" style={{ color: 'var(--muted-color)' }}>— command, template, paths</span>
-          </button>
-          {detailsOpen && (
-            <div className="space-y-4 border-t px-3 py-3 text-xs" style={{ borderColor: 'var(--border-color)' }}>
-
-              {/* Selection + image configuration summary */}
-              {details.summary && (
-                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                  <SummaryPanel
-                    heading="Your Selection"
-                    rows={
-                      [
-                        ['Vertical', details.summary.vertical],
-                        details.summary.sku ? ['SKU', details.summary.sku] : null,
-                        ['Platform', details.summary.platform],
-                        ['OS', details.summary.os],
-                        ['Image Type', details.summary.imageType.toUpperCase()],
-                      ] as ([string, string] | null)[]
-                    }
-                  />
-                  <SummaryPanel
-                    heading="Image Configuration"
-                    rows={
-                      [
-                        ['Image', `${details.summary.imageName}${details.summary.imageVersion ? ` (v${details.summary.imageVersion})` : ''}`],
-                        details.summary.description ? ['Description', details.summary.description] : null,
-                        ['Architecture', details.summary.architecture],
-                        details.summary.kernelVersion ? ['Kernel', details.summary.kernelVersion] : null,
-                        ['Packages', `${details.summary.packageCount} packages`],
-                        details.summary.diskSize ? ['Disk', `${details.summary.diskSize}${details.summary.partitionTable ? `, ${details.summary.partitionTable.toUpperCase()}` : ''}${details.summary.partitionCount ? `, ${details.summary.partitionCount} partitions` : ''}`] : null,
-                        details.summary.hostname ? ['Hostname', details.summary.hostname] : null,
-                      ] as ([string, string] | null)[]
-                    }
-                  />
-                </div>
-              )}
-
-              {/* Command */}
-              <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="font-semibold text-slate-600">Command</span>
-                  <button
-                    className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] hover:bg-white"
-                    onClick={copyCommand}
-                  >
-                    📋 Copy
-                  </button>
-                </div>
-                <pre className="overflow-x-auto rounded bg-[#00285a] p-2 font-mono text-[11px] leading-relaxed text-slate-100">
-                  {details.command}
-                </pre>
-              </div>
-
-              {/* Template + dirs */}
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-600">Template</span>
-                <span className="font-mono text-slate-700">{details.template}</span>
-                <a
-                  className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] hover:bg-white"
-                  href={api.templateUrl(buildId)}
-                  download={details.template}
-                >
-                  ⬇ Download
-                </a>
-              </div>
-              {/* Jenkins metadata (dispatched path). Local-build panel just
-                  gets Work dir / Cache dir; Jenkins gets Worker + Build URL. */}
-              {details.jenkins ? (
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
-                  <dt className="font-sans font-semibold">Worker</dt>
-                  <dd className="break-all">{details.jenkins.worker}</dd>
-                  {details.jenkins.buildNumber ? (
-                    <>
-                      <dt className="font-sans font-semibold">Build #</dt>
-                      <dd className="break-all">
-                        <a
-                          className="underline"
-                          style={{ color: 'var(--classic-blue)' }}
-                          href={details.jenkins.buildUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {details.jenkins.buildNumber}
-                        </a>
-                      </dd>
-                    </>
-                  ) : null}
-                  <dt className="font-sans font-semibold">Job</dt>
-                  <dd className="break-all">
-                    <a
-                      className="underline"
-                      style={{ color: 'var(--classic-blue)' }}
-                      href={details.jenkins.jobUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {details.jenkins.jobUrl}
-                    </a>
-                  </dd>
-                </dl>
-              ) : (
-                (details.workDir || details.cacheDir) && (
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-slate-600">
-                    {details.workDir && (
-                      <>
-                        <dt className="font-sans font-semibold">Work dir</dt>
-                        <dd className="break-all">{details.workDir}</dd>
-                      </>
-                    )}
-                    {details.cacheDir && (
-                      <>
-                        <dt className="font-sans font-semibold">Cache dir</dt>
-                        <dd className="break-all">{details.cacheDir}</dd>
-                      </>
-                    )}
-                  </dl>
-                )
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            <span className="font-semibold">
+              {status === 'failed' ? 'Build failed.' : 'Build cancelled.'}
+            </span>
+            <span style={{ color: 'var(--muted-color)' }}>
+              Inspect the log and retry when ready.
+            </span>
+            <button
+              className="ml-auto cursor-pointer rounded-md border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
+              style={{
+                borderColor: 'var(--border-color)',
+                color: 'var(--font-color)',
+              }}
+              disabled={retrying}
+              onClick={onRetry}
+            >
+              {retrying ? 'Starting…' : '↺ Retry'}
+            </button>
+          </div>
         </div>
       )}
-      </Card>
 
+      {/* Summary — rendered inline when the build path carries one
+          (Basic-tab dispatches). Interactive/Advanced dispatches don't
+          set summary; this block collapses cleanly in that case. */}
+      {details?.summary && (
+        <div className="grid flex-none grid-cols-1 gap-3 xl:grid-cols-2">
+          <SummaryPanel
+            heading="Selection"
+            rows={
+              [
+                ['Vertical', details.summary.vertical],
+                details.summary.sku ? ['SKU', details.summary.sku] : null,
+                ['Platform', details.summary.platform],
+                ['OS', details.summary.os],
+                ['Image Type', details.summary.imageType.toUpperCase()],
+              ] as ([string, string] | null)[]
+            }
+          />
+          <SummaryPanel
+            heading="Image"
+            rows={
+              [
+                [
+                  'Name',
+                  details.summary.imageName +
+                    (details.summary.imageVersion
+                      ? ' (v' + details.summary.imageVersion + ')'
+                      : ''),
+                ],
+                details.summary.description
+                  ? ['Description', details.summary.description]
+                  : null,
+                ['Architecture', details.summary.architecture],
+                details.summary.kernelVersion
+                  ? ['Kernel', details.summary.kernelVersion]
+                  : null,
+                ['Packages', details.summary.packageCount + ' packages'],
+                details.summary.diskSize
+                  ? [
+                      'Disk',
+                      details.summary.diskSize +
+                        (details.summary.partitionTable
+                          ? ', ' +
+                            details.summary.partitionTable.toUpperCase()
+                          : '') +
+                        (details.summary.partitionCount
+                          ? ', ' +
+                            details.summary.partitionCount +
+                            ' partitions'
+                          : ''),
+                    ]
+                  : null,
+                details.summary.hostname
+                  ? ['Hostname', details.summary.hostname]
+                  : null,
+              ] as ([string, string] | null)[]
+            }
+          />
+        </div>
+      )}
+
+      {/*
+       * DETAILS — collapsible section for the exact command, template file,
+       * and worker / work-dir metadata. Uses the standard accordion Card
+       * (same as Interactive tab sections) so the visual language stays
+       * consistent. Collapsed by default: the log is what the operator
+       * really wants; details are for post-mortem.
+       */}
+      {details && (
+        <Card
+          title="Build details"
+          titleStyle="section"
+          collapsible
+          defaultCollapsed
+          className="flex-none"
+        >
+          <div className="space-y-4 text-xs">
+            {/* Command — dark code surface matching the terminal + YAML editor. */}
+            <div>
+              <div className="mb-1.5 flex items-center gap-2">
+                <span
+                  className="text-xs font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--muted-color)' }}
+                >
+                  Command
+                </span>
+                <button
+                  className="cursor-pointer rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    color: 'var(--muted-color)',
+                  }}
+                  onClick={copyCommand}
+                  title="Copy command to clipboard"
+                >
+                  Copy
+                </button>
+              </div>
+              <pre
+                className="overflow-x-auto rounded-md p-3 font-mono text-[11px] leading-relaxed"
+                style={{
+                  background: '#1e1e1e',
+                  color: '#d4d4d4',
+                }}
+              >
+                {details.command}
+              </pre>
+            </div>
+
+            {/* Template row */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--muted-color)' }}
+              >
+                Template
+              </span>
+              <span
+                className="font-mono text-[11px]"
+                style={{ color: 'var(--font-color)' }}
+              >
+                {details.template}
+              </span>
+              <a
+                className="cursor-pointer rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                style={{
+                  borderColor: 'var(--border-color)',
+                  color: 'var(--muted-color)',
+                }}
+                href={api.templateUrl(buildId)}
+                download={details.template}
+              >
+                Download
+              </a>
+            </div>
+
+            {/* Jenkins metadata (dispatched path) or local work/cache dirs */}
+            {details.jenkins ? (
+              <dl
+                className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]"
+                style={{ color: 'var(--font-color)' }}
+              >
+                <dt
+                  className="font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--muted-color)' }}
+                >
+                  Worker
+                </dt>
+                <dd className="break-all font-mono">
+                  {details.jenkins.worker}
+                </dd>
+                {details.jenkins.buildNumber ? (
+                  <>
+                    <dt
+                      className="font-semibold uppercase tracking-wider"
+                      style={{ color: 'var(--muted-color)' }}
+                    >
+                      Build
+                    </dt>
+                    <dd className="break-all font-mono">
+                      <a
+                        className="underline"
+                        style={{ color: 'var(--classic-blue)' }}
+                        href={details.jenkins.buildUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        #{details.jenkins.buildNumber}
+                      </a>
+                    </dd>
+                  </>
+                ) : null}
+                <dt
+                  className="font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--muted-color)' }}
+                >
+                  Job
+                </dt>
+                <dd className="break-all">
+                  <a
+                    className="font-mono underline"
+                    style={{ color: 'var(--classic-blue)' }}
+                    href={details.jenkins.jobUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {details.jenkins.jobUrl}
+                  </a>
+                </dd>
+              </dl>
+            ) : (
+              (details.workDir || details.cacheDir) && (
+                <dl
+                  className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[11px]"
+                  style={{ color: 'var(--font-color)' }}
+                >
+                  {details.workDir && (
+                    <>
+                      <dt
+                        className="font-semibold uppercase tracking-wider"
+                        style={{ color: 'var(--muted-color)' }}
+                      >
+                        Work dir
+                      </dt>
+                      <dd className="break-all font-mono">
+                        {details.workDir}
+                      </dd>
+                    </>
+                  )}
+                  {details.cacheDir && (
+                    <>
+                      <dt
+                        className="font-semibold uppercase tracking-wider"
+                        style={{ color: 'var(--muted-color)' }}
+                      >
+                        Cache dir
+                      </dt>
+                      <dd className="break-all font-mono">
+                        {details.cacheDir}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/*
+       * BUILD LOG — the star of the show. Terminal is always dark (both
+       * app themes) to match the YAML editor's vscode-dark background, so
+       * the "code surfaces" family reads as one visual layer.
+       */}
       <Card
-        title="Build Log"
+        title="Build log"
+        titleStyle="section"
         actions={
-          <>
-            <button
-              className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
-              style={{ borderColor: 'var(--border-color)' }}
-              disabled={logs.length === 0}
+          <div className="flex items-center gap-1">
+            <IconAction
               onClick={copyLogs}
-              title="Copy logs to clipboard"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              Copy logs
-            </button>
-            <button
-              className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs disabled:opacity-50 hover:bg-black/5 dark:hover:bg-white/10"
-              style={{ borderColor: 'var(--border-color)' }}
               disabled={logs.length === 0}
-              onClick={downloadLogs}
-              title="Download logs as a file"
+              title="Copy logs to clipboard"
+              label="Copy"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Download logs
-            </button>
-            <button
-              className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-              style={{ borderColor: 'var(--border-color)' }}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            </IconAction>
+            <IconAction
+              onClick={downloadLogs}
+              disabled={logs.length === 0}
+              title="Download logs as a file"
+              label="Download"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </IconAction>
+            <IconAction
               onClick={toggleFullscreen}
-              title={isFullscreen ? 'Exit fullscreen (Esc)' : 'View terminal fullscreen'}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              title={
+                isFullscreen ? 'Exit fullscreen (Esc)' : 'View terminal fullscreen'
+              }
+              label={isFullscreen ? 'Collapse' : 'Fullscreen'}
             >
               {isFullscreen ? (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-3.5 w-3.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M4 14h6v6" />
+                  <path d="M20 10h-6V4" />
+                  <path d="M14 10l7-7" />
+                  <path d="M3 21l7-7" />
                 </svg>
               ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 8V3h5"/><path d="M21 8V3h-5"/><path d="M3 16v5h5"/><path d="M21 16v5h-5"/>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-3.5 w-3.5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M3 8V3h5" />
+                  <path d="M21 8V3h-5" />
+                  <path d="M3 16v5h5" />
+                  <path d="M21 16v5h-5" />
                 </svg>
               )}
-              {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            </button>
-          </>
+            </IconAction>
+          </div>
         }
         className="flex min-h-0 flex-1 flex-col"
       >
         {/* min-h-0 is critical on flex children -- default min-height:auto
-            would prevent the terminal from shrinking below its content
-            size, breaking the flex-1 grow behavior. When this element is
-            the fullscreen target the browser paints its own black backdrop
+            would prevent the terminal from shrinking below its content size,
+            breaking the flex-1 grow behavior. When this element is the
+            fullscreen target the browser paints its own black backdrop
             outside the terminal; the inline padding and border-radius are
-            fine to keep because the terminal container fills the element. */}
+            fine to keep because the terminal container fills the element.
+            Terminal surface matches the YAML editor's vscode-dark (#1e1e1e)
+            in BOTH app themes so log + code read as the same family. */}
         <div
           ref={terminalWrapRef}
           className="terminal-fullscreen-host min-h-0 flex-1 overflow-hidden rounded-md"
           style={{
-            background: 'var(--terminal-background, #0b1220)',
+            background: '#1e1e1e',
             padding: '8px',
           }}
         >
           {logs.length === 0 ? (
-            <div className="p-3 font-mono text-xs" style={{ color: 'var(--muted-color)' }}>
+            <div
+              className="p-3 font-mono text-xs"
+              style={{ color: '#8a8a8a' }}
+            >
               Waiting for build output…
             </div>
           ) : (
@@ -415,97 +581,32 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
         </div>
       </Card>
 
+      {/*
+       * ARTIFACTS — appears only when something to link at. The
+       * Artifactory row is highlighted more prominently than the
+       * individual file rows because that's the shareable outcome for
+       * downstream consumers.
+       */}
       {(artifacts.length > 0 || details?.jenkins?.artifactoryUrl) && (
-        <Card title="Artifacts" className="flex-none">
-          {artifacts.length > 0 && (
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-left" style={{ background: 'color-mix(in srgb, var(--classic-blue) 12%, var(--section-background))' }}>
-                <th className="px-3 py-2">Name</th>
-                <th className="px-3 py-2">Type</th>
-                <th className="px-3 py-2">Path</th>
-                <th className="px-3 py-2 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {artifacts.map((a, i) => {
-                // Prefer a Jenkins-hosted URL when the artifact carries one; fall
-                // back to the local proxy path otherwise. `key` uses name+index
-                // because Jenkins artifacts may repeat filenames across nested
-                // relative paths.
-                const href = a.url ?? `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`
-                const display = a.path ?? a.url ?? a.name
-                return (
-                  <tr key={`${a.name}-${i}`} className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {a.url ? (
-                        <a
-                          className="underline"
-                          style={{ color: 'var(--classic-blue)' }}
-                          href={a.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {a.name}
-                        </a>
-                      ) : (
-                        a.name
-                      )}
-                    </td>
-                    <td className="px-3 py-2 uppercase">{a.type}</td>
-                    <td className="px-3 py-2 font-mono text-xs break-all" style={{ color: 'var(--muted-color)' }}>{display}</td>
-                    <td className="px-3 py-2 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-                          style={{ borderColor: 'var(--border-color)' }}
-                          title="Copy path or URL to clipboard"
-                          onClick={() => copyPath(display)}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                          Copy
-                        </button>
-                        <a
-                          className="flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/10"
-                          style={{ borderColor: 'var(--border-color)' }}
-                          title="Download artifact"
-                          href={href}
-                          download={a.name}
-                          target={a.url ? '_blank' : undefined}
-                          rel={a.url ? 'noopener noreferrer' : undefined}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                          Download
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          )}
-
+        <Card title="Artifacts" titleStyle="section" className="flex-none">
           {details?.jenkins?.artifactoryUrl && (
             <div
-              className={
-                'flex flex-wrap items-center gap-3 text-xs ' +
-                // Add a top border + spacing ONLY when the file table above
-                // it is rendered. When mid-build (table empty, URL only),
-                // the row IS the card body, so a floating separator would
-                // sit under nothing and read as visual noise.
-                (artifacts.length > 0 ? 'mt-3 border-t pt-3' : '')
-              }
-              style={{ borderColor: 'var(--border-color)' }}
+              className="mb-3 flex flex-wrap items-center gap-3 rounded-md border p-3 text-xs"
+              style={{
+                borderColor:
+                  'color-mix(in srgb, var(--classic-blue) 45%, var(--border-color))',
+                background:
+                  'color-mix(in srgb, var(--classic-blue) 6%, var(--section-background))',
+              }}
             >
               <span
-                className="font-semibold"
+                className="font-semibold uppercase tracking-wider"
                 style={{ color: 'var(--muted-color)' }}
               >
-                📦 Published to Artifactory
+                Artifactory
               </span>
               <a
-                className="flex-1 truncate font-mono underline"
+                className="flex-1 truncate font-mono text-[11px] underline"
                 style={{ color: 'var(--classic-blue)' }}
                 href={details.jenkins.artifactoryUrl}
                 target="_blank"
@@ -516,17 +617,25 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               </a>
               <div className="flex items-center gap-1">
                 <button
-                  className="flex items-center gap-1 rounded border px-2 py-1 hover:bg-black/5 dark:hover:bg-white/10"
-                  style={{ borderColor: 'var(--border-color)' }}
+                  className="cursor-pointer rounded border px-2 py-1 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    color: 'var(--muted-color)',
+                  }}
                   title="Copy Artifactory URL to clipboard"
-                  onClick={() => details.jenkins && copyPath(details.jenkins.artifactoryUrl!)}
+                  onClick={() =>
+                    details.jenkins &&
+                    copyPath(details.jenkins.artifactoryUrl!)
+                  }
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                  Copy URL
+                  Copy
                 </button>
                 <a
-                  className="flex items-center gap-1 rounded border px-2 py-1 font-medium hover:bg-black/5 dark:hover:bg-white/10"
-                  style={{ borderColor: 'var(--classic-blue)', color: 'var(--classic-blue)' }}
+                  className="cursor-pointer rounded border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{
+                    borderColor: 'var(--classic-blue)',
+                    color: 'var(--classic-blue)',
+                  }}
                   href={details.jenkins.artifactoryUrl}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -537,27 +646,141 @@ export function BuildView({ buildId, onRetry, retrying, onStatusChange }: BuildV
               </div>
             </div>
           )}
+
+          {artifacts.length > 0 && (
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr
+                  className="text-left text-[11px] font-semibold uppercase tracking-wider"
+                  style={{
+                    background:
+                      'color-mix(in srgb, var(--classic-blue) 8%, var(--section-background))',
+                    color: 'var(--muted-color)',
+                  }}
+                >
+                  <th className="px-3 py-2">Name</th>
+                  <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Path</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {artifacts.map((a, i) => {
+                  // Prefer a Jenkins-hosted URL when the artifact carries one; fall
+                  // back to the local proxy path otherwise. `key` uses name+index
+                  // because Jenkins artifacts may repeat filenames across nested
+                  // relative paths.
+                  const href =
+                    a.url ??
+                    `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`
+                  const display = a.path ?? a.url ?? a.name
+                  return (
+                    <tr
+                      key={a.name + ':' + i}
+                      className="border-b"
+                      style={{ borderColor: 'var(--border-color)' }}
+                    >
+                      <td className="px-3 py-2 font-mono text-xs">
+                        {a.url ? (
+                          <a
+                            className="underline"
+                            style={{ color: 'var(--classic-blue)' }}
+                            href={a.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {a.name}
+                          </a>
+                        ) : (
+                          a.name
+                        )}
+                      </td>
+                      <td
+                        className="px-3 py-2 text-[11px] uppercase tracking-wide"
+                        style={{ color: 'var(--muted-color)' }}
+                      >
+                        {a.type}
+                      </td>
+                      <td
+                        className="break-all px-3 py-2 font-mono text-xs"
+                        style={{ color: 'var(--muted-color)' }}
+                      >
+                        {display}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            className="cursor-pointer rounded border px-2 py-1 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                            style={{
+                              borderColor: 'var(--border-color)',
+                              color: 'var(--muted-color)',
+                            }}
+                            title="Copy path or URL to clipboard"
+                            onClick={() => copyPath(display)}
+                          >
+                            Copy
+                          </button>
+                          <a
+                            className="cursor-pointer rounded border px-2 py-1 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                            style={{
+                              borderColor: 'var(--border-color)',
+                              color: 'var(--muted-color)',
+                            }}
+                            title="Download artifact"
+                            href={href}
+                            download={a.name}
+                            target={a.url ? '_blank' : undefined}
+                            rel={a.url ? 'noopener noreferrer' : undefined}
+                          >
+                            Download
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
         </Card>
       )}
     </div>
   )
 }
 
-function StatusBadge({ status }: { status: Status }) {
-  const cls: Record<Status, string> = {
-    running: 'bg-amber-100 text-amber-800',
-    cancelling: 'bg-amber-100 text-amber-800',
-    cancelled: 'bg-slate-200 text-slate-700',
-    success: 'bg-green-100 text-green-800',
-    failed: 'bg-red-100 text-red-800',
-  }
-  const label: Record<Status, string> = {
-    running: 'Building…',
-    cancelling: 'Cancelling…',
-    cancelled: '⊘ Cancelled',
-    success: '✓ Completed',
-    failed: '✗ Failed',
-  }
-  return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls[status]}`}>{label[status]}</span>
+/**
+ * Minimal, cursor-pointer icon button with an accessible label. Kept
+ * lightweight so BuildView's log toolbar reads as a tight cluster of
+ * uniform affordances rather than three differently-styled buttons.
+ */
+function IconAction({
+  onClick,
+  disabled,
+  title,
+  label,
+  children,
+}: {
+  onClick: () => void
+  disabled?: boolean
+  title: string
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={label}
+      className="inline-flex cursor-pointer items-center justify-center rounded-md border p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:bg-black/5 dark:hover:bg-white/10"
+      style={{
+        borderColor: 'var(--border-color)',
+        color: 'var(--muted-color)',
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 

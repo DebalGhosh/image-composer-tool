@@ -5,6 +5,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,9 +26,10 @@ import (
 type buildStatus string
 
 const (
-	statusRunning buildStatus = "running"
-	statusSuccess buildStatus = "success"
-	statusFailed  buildStatus = "failed"
+	statusRunning   buildStatus = "running"
+	statusSuccess   buildStatus = "success"
+	statusFailed    buildStatus = "failed"
+	statusCancelled buildStatus = "cancelled"
 )
 
 // artifact describes one output file (image or SBOM).
@@ -49,7 +51,16 @@ type jenkinsMeta struct {
 	Worker      string // e.g. "worker-04"
 	JobURL      string // https://…/job/ict-farm/job/workers/job/worker-04/
 	QueueURL    string // https://…/queue/item/<id>/
-	BuildURL    string // https://…/job/…/worker-04/<N>/  (set once assigned)
+	// BuildURL is what surfaces to the UI ("logs ↗" link). We append
+	// /cloudbees-pipeline-explorer/ to it because that view is more
+	// useful than the plain build page.
+	BuildURL string // https://…/job/…/worker-04/<N>/cloudbees-pipeline-explorer/
+	// RawBuildURL is the un-decorated Jenkins build URL. Kept separate
+	// so the cancel path (POST rawURL+"stop") + any future rebuild /
+	// changeSet fetches don't have to string-slice BuildURL. Same
+	// mutation window as BuildURL (set under mu once the queue item
+	// resolves).
+	RawBuildURL string // https://…/job/…/worker-04/<N>/
 	BuildNumber int    // 0 until assigned
 	// Artifactory upload directory the PUBLISH stage prints via
 	//   echo "Artefacts published to: https://af01p-png.…/artifactory/<repo>/<job>/<datetime>/"
@@ -75,6 +86,12 @@ type build struct {
 	Summary          *composeSummary // image configuration summary, nil for YAML builds
 	Jenkins          *jenkinsMeta    // set for Jenkins-dispatched builds; nil otherwise
 	done             chan struct{}   // closed when the build finishes
+	// cancel unblocks the runner goroutine's HTTP calls + poll waits
+	// when the /cancel handler fires. Set once in the dispatch handler
+	// before the goroutine starts; nil for local exec builds (which
+	// have no remote stop path in this MVP). Safe to call multiple
+	// times — context.CancelFunc is idempotent.
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	status    buildStatus
@@ -126,6 +143,32 @@ func (t *buildTracker) get(id string) (*build, bool) {
 	defer t.mu.Unlock()
 	b, ok := t.builds[id]
 	return b, ok
+}
+
+// findByJenkins returns the build dispatched to (worker, buildNumber) if one
+// exists in the registry. Enables URL-based deep-links: the UI can round-trip
+// a shareable ?worker=X&buildNo=N and resolve it back to the internal build ID
+// on cold load. Returns (nil, false) when no build matches.
+//
+// Iteration is O(N) over the registry, which stays fine because N is the
+// count of dispatched-this-process builds (dozens at most before restart).
+// If the registry ever grows past that we can add a secondary index keyed by
+// (Worker, BuildNumber) — but until then the map scan avoids the bookkeeping.
+func (t *buildTracker) findByJenkins(worker string, buildNumber int) (*build, bool) {
+	if worker == "" || buildNumber <= 0 {
+		return nil, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, b := range t.builds {
+		if b.Jenkins == nil {
+			continue
+		}
+		if b.Jenkins.Worker == worker && b.Jenkins.BuildNumber == buildNumber {
+			return b, true
+		}
+	}
+	return nil, false
 }
 
 // appendLog records a log line and is safe for concurrent use.
@@ -379,12 +422,54 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 }
 
 // finish records the build's terminal status, artifacts, and error under lock.
+//
+// Idempotent-for-terminal-states: if the build is already in a terminal
+// state (success / failed / cancelled), we DON'T overwrite it. This
+// matters for the stop-job flow — the /cancel handler marks the build
+// cancelled synchronously, then a few seconds later the runner
+// goroutine's poll loop notices Jenkins reported the build as
+// FAILURE / ABORTED and would otherwise clobber "cancelled" back to
+// "failed", which is misleading in the UI.
 func (b *build) finish(status buildStatus, arts []artifact, errMsg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.status != statusRunning && b.status != "" {
+		return
+	}
 	b.status = status
 	b.artifacts = arts
 	b.errMsg = errMsg
+}
+
+// markCancelled transitions a running build into the cancelled terminal
+// state directly, without waiting for the runner goroutine to notice
+// Jenkins abort. Called by the /cancel HTTP handler. No-op if the
+// build is already in a terminal state.
+//
+// Also signals the runner goroutine via b.cancel so its in-flight
+// progressiveText / getRun HTTP calls unblock immediately. Without
+// this, the runner would keep polling for up to the 6h ctx ceiling
+// while Jenkins winds the worker down, and the SSE terminal event
+// (gated on <-b.done, which is closed only when the runner returns)
+// would fire seconds-to-minutes late — or never, if /stop is silently
+// ineffective.
+//
+// The cancel is invoked OUTSIDE the mutex to avoid recursing into any
+// callback that might try to take mu (finish() certainly does).
+func (b *build) markCancelled(reason string) bool {
+	b.mu.Lock()
+	if b.status != statusRunning {
+		b.mu.Unlock()
+		return false
+	}
+	b.status = statusCancelled
+	b.errMsg = reason
+	cancel := b.cancel
+	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return true
 }
 
 // parseArtifacts extracts the artifact list from ICT's build output. ICT prints

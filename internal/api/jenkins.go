@@ -339,6 +339,42 @@ func (j *jenkinsClient) getRun(ctx context.Context, buildURL string) (jenkinsRun
 	return run, nil
 }
 
+// stopBuild issues Jenkins' graceful abort on a running build. Jenkins
+// responds with a 302 redirect to the build page — the actual worker
+// shutdown is asynchronous on Jenkins' side. Returns nil on 200/302/204;
+// wraps any other status code with the response body (up to 4 KiB) for
+// diagnostics.
+//
+// This is the /stop endpoint (not /term or /kill) — see
+// https://www.jenkins.io/doc/book/using/aborting-a-build/ — the least
+// forceful of the three, and the right one for a UI "Stop" button.
+// /term is intended as a follow-up if /stop hangs; /kill is a last
+// resort. Callers who need escalation should retry with /term after
+// waiting.
+func (j *jenkinsClient) stopBuild(ctx context.Context, buildURL string) error {
+	if buildURL == "" {
+		return fmt.Errorf("stop build: empty buildURL (build not yet dispatched?)")
+	}
+	u := strings.TrimRight(buildURL, "/") + "/stop"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		return err
+	}
+	// Some Jenkins versions want a content type on POST even without a body.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := j.do(req)
+	if err != nil {
+		return fmt.Errorf("stop build: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusFound, http.StatusNoContent:
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("stop build: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
 // jenkinsArtifact mirrors one entry of a build's artifacts[] array.
 type jenkinsArtifact struct {
 	FileName     string `json:"fileName"`
@@ -457,6 +493,11 @@ func (s *Server) handleJenkinsDispatch(w http.ResponseWriter, r *http.Request) {
 	// the buildNumber / buildURL as soon as Jenkins de-queues.
 	id := uuid.NewString()
 	jobURL := s.jenkins.jobURL(worker.Name)
+	// 6h ceiling covers even the longest ICT variants; runner cancels on
+	// finish, and the /cancel handler cancels it early via markCancelled.
+	// Detached from r.Context() so an abandoned browser doesn't tear the
+	// runner down.
+	runCtx, runCancel := context.WithTimeout(context.Background(), 6*time.Hour)
 	b := &build{
 		ID:               id,
 		status:           statusRunning,
@@ -464,6 +505,7 @@ func (s *Server) handleJenkinsDispatch(w http.ResponseWriter, r *http.Request) {
 		Template:         "template.yml",
 		TemplatePathYAML: req.YAML,
 		done:             make(chan struct{}),
+		cancel:           runCancel,
 		Jenkins: &jenkinsMeta{
 			Worker:   worker.Name,
 			JobURL:   jobURL,
@@ -478,7 +520,7 @@ func (s *Server) handleJenkinsDispatch(w http.ResponseWriter, r *http.Request) {
 	b.appendLog(fmt.Sprintf("[dispatcher] Queue item:   %s", queueURL))
 	b.appendLog(fmt.Sprintf("[dispatcher] TEMPLATE_YAML size: %d bytes", len(req.YAML)))
 
-	go s.runJenkinsBuild(b)
+	go s.runJenkinsBuild(runCtx, b)
 
 	writeJSON(w, http.StatusAccepted, buildAccepted{
 		BuildID: id,
@@ -487,18 +529,121 @@ func (s *Server) handleJenkinsDispatch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCancelBuild aborts a running Jenkins build. Idempotent-ish: a
+// second cancel on the same build returns 409 rather than double-firing
+// Jenkins' /stop. Only builds actually in the running state can be
+// cancelled — terminal builds return 409 with the current status.
+//
+// Flow:
+//  1. Look up the build in the in-memory tracker.
+//  2. Verify it's a Jenkins dispatch (has jenkinsMeta) — local exec
+//     builds don't have a stop path in this MVP.
+//  3. If RawBuildURL is empty, the queue item hasn't resolved yet;
+//     return 409 CANCEL_TOO_EARLY (the user should retry in a few
+//     seconds). We could in theory hit Jenkins' queue /cancelItem
+//     endpoint for the pre-resolve window, but that's a follow-up.
+//  4. Mark the build cancelled locally BEFORE calling Jenkins so the
+//     UI flips immediately even if the Jenkins call is slow. finish()
+//     is now no-op on already-terminal builds, so the runner
+//     goroutine's later "FAILURE" observation won't overwrite it.
+//  5. Fire-and-forget the Jenkins /stop with the REQUEST's context so
+//     an abandoned browser can still complete the abort.
+func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
+	if s.jenkins == nil {
+		writeError(w, http.StatusServiceUnavailable, "JENKINS_DISABLED",
+			"Jenkins dispatch is not configured on this server.")
+		return
+	}
+	id := r.PathValue("id")
+	b, ok := s.tracker.get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "build not found")
+		return
+	}
+	if b.Jenkins == nil {
+		writeError(w, http.StatusConflict, "NOT_JENKINS_BUILD",
+			"this build was not dispatched via Jenkins; no remote stop path")
+		return
+	}
+
+	b.mu.Lock()
+	rawURL := b.Jenkins.RawBuildURL
+	currentStatus := b.status
+	b.mu.Unlock()
+
+	if currentStatus != statusRunning {
+		writeError(w, http.StatusConflict, "NOT_RUNNING",
+			fmt.Sprintf("build is already in terminal state: %s", currentStatus))
+		return
+	}
+	if rawURL == "" {
+		writeError(w, http.StatusConflict, "CANCEL_TOO_EARLY",
+			"Jenkins hasn't assigned a build number yet; retry in a few seconds")
+		return
+	}
+
+	// Flip the local state first so the UI sees "cancelled" immediately.
+	// A concurrent runner-goroutine finish() call would already have
+	// beaten us here if the build just completed on its own — in that
+	// case markCancelled returns false and we bail with the actual
+	// terminal state.
+	if !b.markCancelled("cancelled by user") {
+		b.mu.Lock()
+		latest := b.status
+		b.mu.Unlock()
+		writeError(w, http.StatusConflict, "NOT_RUNNING",
+			fmt.Sprintf("build finished before cancel could apply: %s", latest))
+		return
+	}
+	b.appendLog("[dispatcher] Cancel requested by user; asking Jenkins to stop the build")
+
+	// Detach from r.Context(). A browser that disconnects the moment
+	// after firing /cancel would otherwise abort our outbound POST /stop
+	// mid-flight, leaving the build cancelled locally but still running
+	// on Jenkins. 30s is generous for Jenkins to acknowledge /stop —
+	// it responds with a 302 redirect immediately; anything slower is
+	// mirror trouble worth surfacing as an error.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+	if err := s.jenkins.stopBuild(stopCtx, rawURL); err != nil {
+		// Local state is already cancelled; the operator's intent is
+		// clear (they want this build gone), so don't roll it back.
+		// But this is a REAL upstream failure — surface it with a
+		// non-2xx so the frontend's usual error toast fires and the
+		// operator knows the Jenkins worker is likely still running.
+		b.appendLog(fmt.Sprintf("[dispatcher] warn: Jenkins /stop failed: %v", err))
+		writeError(w, http.StatusBadGateway, "JENKINS_STOP_FAILED",
+			fmt.Sprintf("local state marked cancelled, but Jenkins /stop failed: %v", err))
+		return
+	}
+	b.appendLog("[dispatcher] Jenkins acknowledged /stop request")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"buildId": id,
+		"status":  string(statusCancelled),
+	})
+}
+
 // runJenkinsBuild resolves the queue item to a build, tails the log via
 // progressiveText, and records terminal status + artifacts. Runs entirely in
 // its own goroutine. Never panics.
-func (s *Server) runJenkinsBuild(b *build) {
+func (s *Server) runJenkinsBuild(ctx context.Context, b *build) {
 	log := logger.Logger()
 	defer close(b.done)
 
-	// Give the entire flow a generous timeout ceiling. ICT builds can be long
-	// (2+ hours on some variants); the deadline here is a safety net against
-	// a totally-wedged Jenkins call, not a real SLA.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
-	defer cancel()
+	// ctx is owned by the dispatch handler (6h WithTimeout, cancel func
+	// stored on b.cancel so /cancel can trip it early). On any exit path
+	// we release it — both to free the timer on a fast successful build
+	// and to make double-cancel a no-op (context.CancelFunc is
+	// idempotent).
+	defer func() {
+		b.mu.Lock()
+		c := b.cancel
+		b.cancel = nil
+		b.mu.Unlock()
+		if c != nil {
+			c()
+		}
+	}()
 
 	// 1) Wait for the build number.
 	buildURL, buildNum, err := s.jenkins.waitForBuild(ctx, b.Jenkins.QueueURL, func(why string) {
@@ -511,11 +656,19 @@ func (s *Server) runJenkinsBuild(b *build) {
 		b.finish(statusFailed, nil, err.Error())
 		return
 	}
+	// Point users at the cloudbees-pipeline-explorer view of the build
+	// rather than the plain build page. It surfaces per-stage logs +
+	// timings inline, which is what an operator actually wants when
+	// clicking "logs ↗" from the history list. Cloudbees-hosted Jenkins
+	// exposes this path for every build; if the plugin is missing the
+	// path 404s cleanly and Jenkins auto-redirects to the build root.
+	pipelineExplorerURL := strings.TrimRight(buildURL, "/") + "/cloudbees-pipeline-explorer/"
 	b.mu.Lock()
-	b.Jenkins.BuildURL = buildURL
+	b.Jenkins.BuildURL = pipelineExplorerURL
+	b.Jenkins.RawBuildURL = buildURL
 	b.Jenkins.BuildNumber = buildNum
 	b.mu.Unlock()
-	b.appendLog(fmt.Sprintf("[dispatcher] Executing as build #%d — %s", buildNum, buildURL))
+	b.appendLog(fmt.Sprintf("[dispatcher] Executing as build #%d — %s", buildNum, pipelineExplorerURL))
 
 	// 2) Tail the log via progressiveText until the writer closes.
 	var offset int64

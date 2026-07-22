@@ -68,7 +68,8 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		case <-b.done:
 			emit() // drain remaining lines
 			res := b.snapshot()
-			if res.status == statusSuccess {
+			switch res.status {
+			case statusSuccess:
 				arts := res.artifacts
 				if arts == nil {
 					arts = []artifact{}
@@ -77,7 +78,14 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 					"status":    string(statusSuccess),
 					"artifacts": arts,
 				})
-			} else {
+			case statusCancelled:
+				// Distinct event so the browser can render cancellation
+				// with its own visual (not the red 'failed' toast).
+				sendEvent(w, "error", map[string]any{
+					"status":  string(statusCancelled),
+					"message": res.errMsg,
+				})
+			default:
 				sendEvent(w, "error", map[string]any{
 					"status":  string(statusFailed),
 					"message": res.errMsg,
