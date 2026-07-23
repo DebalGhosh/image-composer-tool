@@ -27,6 +27,14 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
   const [review, setReview] = useState<ComposeResponse | null>(null)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  // One-shot latch: as soon as the cascade first reaches `complete`, we
+  // auto-open the review card so the user doesn't have to hunt for the
+  // checkbox. On subsequent edits — even if they re-complete the cascade
+  // — we respect whatever the user's last explicit toggle was. The latch
+  // is component-lifetime only (no localStorage), because BuildImagePage
+  // remounts BasicPage on tab return and a fresh visit deserves a fresh
+  // auto-reveal.
+  const autoOpenedRef = useRef(false)
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -34,6 +42,73 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
   )
 
   const complete = !!opts?.matched
+
+  /*
+   * Auto-fill single-option dropdowns.
+   *
+   * If a cascade dimension collapses to exactly one option, there's no real
+   * choice for the user to make — expanding the dropdown to click the sole
+   * entry is pure friction. This effect walks the cascade top-down and sets
+   * the first unset dimension that has a single option, one dimension per
+   * render. Setting state schedules a re-render; useMemo recomputes `opts`
+   * for the new selection; this effect fires again for the next dimension.
+   * The chain terminates naturally the moment it hits a dimension that has
+   * either 0 or 2+ options, or is already set.
+   *
+   * Enabling conditions mirror each <Select>'s `disabled` prop exactly, so
+   * we never auto-fill a dimension that would still be greyed out to the
+   * user (e.g. we don't set imageType before its kernel parent is picked
+   * when there ARE kernel options to choose from).
+   *
+   * The auto-fill uses `setField` directly rather than the local `setSel`
+   * wrapper because setSel closes any open review — auto-filling shouldn't
+   * yank a review that the user might have opened between one auto-set and
+   * the next. Fields the user changes still go through setSel and behave
+   * exactly as before.
+   */
+  useEffect(() => {
+    if (!opts) return
+    if (opts.verticals.length === 1 && !selection.vertical) {
+      setField('vertical', opts.verticals[0].id)
+      return
+    }
+    if (selection.vertical && opts.skus.length === 1 && !selection.sku) {
+      setField('sku', opts.skus[0].id)
+      return
+    }
+    // Platform enables when sku is set OR when this vertical has no sku
+    // dimension at all (opts.skus.length === 0).
+    const skuGate = !!selection.sku || opts.skus.length === 0
+    if (
+      selection.vertical &&
+      skuGate &&
+      opts.platforms.length === 1 &&
+      !selection.platform
+    ) {
+      setField('platform', opts.platforms[0].id)
+      return
+    }
+    if (selection.platform && opts.oses.length === 1 && !selection.os) {
+      setField('os', opts.oses[0].id)
+      return
+    }
+    if (selection.os && opts.kernels.length === 1 && !selection.kernel) {
+      setField('kernel', opts.kernels[0].id)
+      return
+    }
+    // Image type enables when os is set AND (no kernel dimension OR kernel
+    // is set). Matches the imageType <Select>'s `disabled` predicate.
+    const kernelGate = opts.kernels.length === 0 || !!selection.kernel
+    if (
+      selection.os &&
+      kernelGate &&
+      opts.imageTypes.length === 1 &&
+      !selection.imageType
+    ) {
+      setField('imageType', opts.imageTypes[0].id)
+      return
+    }
+  }, [opts, selection, setField])
 
   /*
    * Preview-pane drop-in animation.
@@ -93,13 +168,59 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
     }
   }, [complete])
 
+  /*
+   * Auto-open the review card the FIRST time the cascade reaches a
+   * complete selection. After the initial reveal we defer entirely to
+   * whatever the user's last click was — if they close it, we don't
+   * re-open on re-completion (nagging); if they leave it open, edits
+   * that break-then-fix the cascade still work the same as before.
+   *
+   * Placed BEFORE the loading early-return so hook order stays
+   * unconditional across renders (Rules of Hooks).
+   *
+   * Two subtleties addressed in this handler:
+   *
+   *   1. Cancellation: a `cancelled` flag flipped by the effect's
+   *      cleanup ensures that if the user edits a field while the
+   *      compose() fetch is in flight (breaking the cascade,
+   *      changing the vertical, or manually closing the review),
+   *      the stale response is dropped instead of resurrecting a
+   *      review card the user has already dismissed.
+   *
+   *   2. Latch timing: autoOpenedRef flips to true ONLY after the
+   *      fetch resolves successfully AND is still current. A
+   *      transient network failure on the first attempt used to
+   *      permanently kill auto-reveal for the session; now it
+   *      leaves the latch open so the next re-completion still
+   *      gets a chance.
+   */
+  useEffect(() => {
+    if (!complete || autoOpenedRef.current || !manifest) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        setBusy(true)
+        const r = await api.compose(selection)
+        if (cancelled) return
+        autoOpenedRef.current = true
+        setReview(r)
+        setReviewOpen(true)
+      } catch (e) {
+        if (cancelled) return
+        toast.danger((e as Error).message, { title: 'Review failed' })
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complete])
+
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
 
-  const onToggleReview = async () => {
-    if (reviewOpen) {
-      setReviewOpen(false)
-      return
-    }
+  const openReview = async () => {
     if (!complete) return
     try {
       setBusy(true)
@@ -110,6 +231,14 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
     } finally {
       setBusy(false)
     }
+  }
+
+  const onToggleReview = async () => {
+    if (reviewOpen) {
+      setReviewOpen(false)
+      return
+    }
+    await openReview()
   }
 
   const onBuild = async () => {
