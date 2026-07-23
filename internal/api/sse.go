@@ -38,12 +38,35 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 	// elsewhere) so lines ship the instant we Flush() them.
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// Track the last phase + install counter we told the client, so the
+	// `phase` event only fires on genuine transitions instead of after
+	// every appended log line. Keeps chatter down without needing a
+	// separate wake channel — detectPhase is O(n) over the log buffer,
+	// which is fine for a build's few-thousand-line buffer.
+	lastPhase := ""
+	lastInstallDone := -1
+	lastInstallTotal := -1
+	emitPhase := func(lines []string) {
+		ph := detectPhase(lines)
+		done, total := installProgress(lines)
+		if ph == lastPhase && done == lastInstallDone && total == lastInstallTotal {
+			return
+		}
+		lastPhase, lastInstallDone, lastInstallTotal = ph, done, total
+		sendEvent(w, "phase", map[string]any{
+			"phase":         ph,
+			"installDone":   done,
+			"installTotal":  total,
+		})
+	}
+
 	sent := 0
 	emit := func() {
 		lines := b.snapshotLogs()
 		for ; sent < len(lines); sent++ {
 			sendEvent(w, "log", map[string]string{"message": lines[sent]})
 		}
+		emitPhase(lines)
 		flusher.Flush()
 	}
 
@@ -74,6 +97,16 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 				if arts == nil {
 					arts = []artifact{}
 				}
+				// One authoritative "done" phase transition so the
+				// stepper's last step lights up even if the log
+				// substring markers didn't reach it (e.g. a template
+				// whose upload path doesn't emit an "Uploading to
+				// Artifactory" line).
+				sendEvent(w, "phase", map[string]any{
+					"phase":        "done",
+					"installDone":  lastInstallDone,
+					"installTotal": lastInstallTotal,
+				})
 				sendEvent(w, "complete", map[string]any{
 					"status":    string(statusSuccess),
 					"artifacts": arts,

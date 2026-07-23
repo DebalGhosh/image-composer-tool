@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useToast } from '../store'
 import type { Artifact, BuildDetails } from '../api/types'
+import { BuildProgress } from './BuildProgress'
 import { Card } from './Card'
 import { SummaryPanel } from './SummaryPanel'
 import { TerminalLog } from './TerminalLog'
@@ -45,6 +46,14 @@ export function BuildView({
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // Server-derived phase for the stepper. Server-side detectPhase() opens on
+  // "dispatching" before any log line has fired, so we match that default
+  // here to avoid a first-render flash of the wrong step.
+  const [phase, setPhase] = useState<string>('dispatching')
+  const [install, setInstall] = useState<{ done: number; total: number }>({
+    done: 0,
+    total: 0,
+  })
   const terminalWrapRef = useRef<HTMLDivElement>(null)
   const toast = useToast()
 
@@ -78,6 +87,8 @@ export function BuildView({
     setStatus('running')
     setArtifacts([])
     setDetails(null)
+    setPhase('dispatching')
+    setInstall({ done: 0, total: 0 })
 
     // Fetch build details on mount, then poll every 5 s until we've seen
     // both a Jenkins buildNumber AND the Artifactory URL. The URL only
@@ -122,6 +133,19 @@ export function BuildView({
     es.addEventListener('log', (e) => {
       const { message } = JSON.parse((e as MessageEvent).data)
       setLogs((prev) => [...prev, message])
+    })
+    // Phase transitions come as a separate event so we don't have to
+    // re-derive them client-side from log substrings. The server throttles
+    // these to genuine phase changes + install-counter advances; see
+    // internal/api/sse.go and phases.go.
+    es.addEventListener('phase', (e) => {
+      const data = JSON.parse((e as MessageEvent).data)
+      if (typeof data.phase === 'string' && data.phase !== '') {
+        setPhase(data.phase)
+      }
+      if (typeof data.installDone === 'number' && typeof data.installTotal === 'number') {
+        setInstall({ done: data.installDone, total: data.installTotal })
+      }
     })
     es.addEventListener('complete', (e) => {
       const data = JSON.parse((e as MessageEvent).data)
@@ -203,6 +227,19 @@ export function BuildView({
        *     because retry needs `lastYamlRef`, which is scoped to
        *     the App-level dispatch state, not the history entry.
        */}
+      {/* Phase stepper — shows where the build currently is. Stays visible
+          through the terminal state: on failure/cancel the step where things
+          stopped flashes red, so the user can see at a glance whether the
+          break was early (dispatch) or late (publish). Suppressed only on
+          `success` because the artifacts card then dominates the view and
+          the "all green" stepper would be redundant. */}
+      {status !== 'success' && (
+        <BuildProgress
+          phase={phase}
+          install={install}
+          failed={status === 'failed' || status === 'cancelled'}
+        />
+      )}
       {(status === 'failed' || status === 'cancelled') && (
         <div
           className="flex-none rounded-md border p-3 text-xs"
