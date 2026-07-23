@@ -12,6 +12,20 @@ import type {
 
 const BASE = '/api/v1'
 
+// ApiError carries the HTTP status alongside the human-readable message so
+// callers can distinguish "build not on server" (404) from network failures
+// or 5xx transients — the BuildView pane treats 404 as a permanent
+// "gone from server" state and renders an explanatory empty state instead
+// of masquerading it as a build failure.
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
@@ -25,7 +39,7 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(msg)
+    throw new ApiError(res.status, msg)
   }
   return res.json() as Promise<T>
 }

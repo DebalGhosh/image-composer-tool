@@ -188,7 +188,18 @@ export function BuildImagePage({
                 Monitor Builds
               </h1>
               {activeBuildId ? (
+                // key={activeBuildId} forces a full remount when the user
+                // clicks a different history row. Without the key BuildView's
+                // buildId-scoped useEffect just re-runs — but in-flight
+                // details polls and already-dispatched EventSource messages
+                // from the OLD build could still land setState calls into the
+                // SAME component instance, painting the new build's pane with
+                // the old build's details/logs. Symptom in the wild:
+                // "clicking a historical row selects some random other
+                // build" — actually the selection was correct but the right
+                // pane was showing leftover data from the previous build.
                 <BuildView
+                  key={activeBuildId}
                   buildId={activeBuildId}
                   onRetry={onRetry}
                   retrying={retrying}

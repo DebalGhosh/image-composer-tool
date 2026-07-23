@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, ApiError } from '../api/client'
 import { useToast } from '../store'
 import type { Artifact, BuildDetails } from '../api/types'
 import { BuildProgress } from './BuildProgress'
@@ -46,6 +46,14 @@ export function BuildView({
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [details, setDetails] = useState<BuildDetails | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // `unavailable` is set when the server has no record of this buildId —
+  // typically because the local history row survived a backend restart
+  // (localStorage outlives the in-memory tracker) or was dispatched from
+  // a different profile. Distinct from `failed`: the build didn't fail,
+  // we just can't fetch its state any more. Set from either a 404 on the
+  // details GET or a `CLOSED` transport error on the SSE stream during
+  // the initial connect.
+  const [unavailable, setUnavailable] = useState(false)
   // Server-derived phase for the stepper. Server-side detectPhase() opens on
   // "dispatching" before any log line has fired, so we match that default
   // here to avoid a first-render flash of the wrong step.
@@ -89,6 +97,7 @@ export function BuildView({
     setDetails(null)
     setPhase('dispatching')
     setInstall({ done: 0, total: 0 })
+    setUnavailable(false)
 
     // Fetch build details on mount, then poll every 5 s until we've seen
     // both a Jenkins buildNumber AND the Artifactory URL. The URL only
@@ -102,9 +111,17 @@ export function BuildView({
     // EXACTLY ONCE per mount when both become populated, so the URL
     // acquires the deep-link fields the moment they're known.
     let notifiedMeta = false
+    // Hoisted so the pollDetails 404 branch can close the SSE stream when
+    // it lands, without a forward reference.
+    let es: EventSource | null = null
     const pollDetails = async () => {
       try {
         const d = await api.buildDetails(buildId)
+        // Cleanup may have flipped stopPolling while the fetch was
+        // in flight — if the parent unmounted / remounted us for a
+        // different buildId, dropping d prevents cross-build state
+        // contamination.
+        if (stopPolling) return
         setDetails(d)
         if (
           !notifiedMeta &&
@@ -121,16 +138,37 @@ export function BuildView({
           )
         }
         if (d.jenkins?.artifactoryUrl) return // done; stop scheduling
-      } catch {
-        /* transient, keep polling */
+      } catch (e) {
+        // 404 means the tracker has no record of this build — usually the
+        // server was restarted since the row was written to localStorage.
+        // Don't keep polling; the pane switches to the "unavailable"
+        // empty state so the user isn't left staring at a spinning
+        // terminal + a misleading "Running" pill.
+        if (e instanceof ApiError && e.status === 404) {
+          if (!stopPolling) {
+            setUnavailable(true)
+            es?.close()
+          }
+          return
+        }
+        /* other errors are transient — keep polling */
       }
       if (!stopPolling) setTimeout(pollDetails, 5000)
     }
     pollDetails()
 
-    const es = new EventSource(api.logsUrl(buildId))
-
-    es.addEventListener('log', (e) => {
+    const stream = new EventSource(api.logsUrl(buildId))
+    es = stream
+    // Track whether the SSE ever successfully connected. The initial 404
+    // path (build not on server) fires an `error` event with readyState=
+    // CLOSED and no prior open, whereas a mid-stream transport hiccup on
+    // an already-running build hits the same handler AFTER an open. We
+    // use this flag to route the two cases differently.
+    let opened = false
+    stream.addEventListener('open', () => {
+      opened = true
+    })
+    stream.addEventListener('log', (e) => {
       const { message } = JSON.parse((e as MessageEvent).data)
       setLogs((prev) => [...prev, message])
     })
@@ -138,7 +176,7 @@ export function BuildView({
     // re-derive them client-side from log substrings. The server throttles
     // these to genuine phase changes + install-counter advances; see
     // internal/api/sse.go and phases.go.
-    es.addEventListener('phase', (e) => {
+    stream.addEventListener('phase', (e) => {
       const data = JSON.parse((e as MessageEvent).data)
       if (typeof data.phase === 'string' && data.phase !== '') {
         setPhase(data.phase)
@@ -147,13 +185,13 @@ export function BuildView({
         setInstall({ done: data.installDone, total: data.installTotal })
       }
     })
-    es.addEventListener('complete', (e) => {
+    stream.addEventListener('complete', (e) => {
       const data = JSON.parse((e as MessageEvent).data)
       const s = data.status === 'cancelled' ? 'cancelled' : 'success'
       setStatus(s)
       setArtifacts(data.artifacts ?? [])
       onStatusChange(s === 'success' ? 'success' : 'idle')
-      es.close()
+      stream.close()
     })
     // NAMED 'error' events carry a JSON payload from the server -- those are
     // terminal (build failed / cancelled) and we should close the stream.
@@ -162,16 +200,26 @@ export function BuildView({
     // has NO `data` field and the browser will auto-reconnect on its own if
     // we leave the EventSource open. Closing on those was killing the stream
     // after the first minor hiccup.
-    es.addEventListener('error', (e) => {
+    stream.addEventListener('error', (e) => {
       const raw = (e as MessageEvent).data
       if (!raw) {
-        // Native transport error. readyState === 0 (CONNECTING) means the
-        // browser is already reconnecting; readyState === 2 (CLOSED) means
-        // the server sent a real closure and we should stop trying.
-        if (es.readyState === EventSource.CLOSED) {
-          setStatus((prev) => (prev === 'running' ? 'failed' : prev))
-          onStatusChange('failed')
+        // Native transport error. readyState === CLOSED means the server
+        // sent a real closure or the initial connect failed.
+        if (stream.readyState === EventSource.CLOSED) {
+          if (!opened) {
+            // Never got past the initial handshake — server has no
+            // record of this build (typically 404 from
+            // handleBuildLogs after a backend restart or a build
+            // dispatched from a different browser profile). Route to
+            // the "unavailable" empty state so the pane stops
+            // pretending the build is running or failed.
+            setUnavailable(true)
+          } else {
+            setStatus((prev) => (prev === 'running' ? 'failed' : prev))
+            onStatusChange('failed')
+          }
         }
+        // readyState === CONNECTING → browser is auto-reconnecting; leave alone.
         return
       }
       // Server-sent terminal error (our 'error' event has a JSON payload).
@@ -187,12 +235,12 @@ export function BuildView({
         setStatus('failed')
         onStatusChange('failed')
       }
-      es.close()
+      stream.close()
     })
 
     return () => {
       stopPolling = true
-      es.close()
+      stream.close()
     }
     // Intentionally depend only on buildId: the SSE stream + poll should
     // restart when the build we're viewing changes, not when the parent
@@ -214,6 +262,37 @@ export function BuildView({
   }
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
+
+  // Server has no record of this build — usually a localStorage row that
+  // outlived a backend restart. Render an explicit empty state so the pane
+  // doesn't misrepresent the situation as "Failed + Waiting for build
+  // output". The row's own status pill (in BuildHistoryList) still shows
+  // whatever status was last written to localStorage — no lying, no
+  // spurious failures.
+  if (unavailable) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div
+          className="flex-none rounded-md border p-6 text-sm"
+          style={{
+            borderColor: 'var(--border-color)',
+            background: 'var(--section-background)',
+            color: 'var(--font-color)',
+          }}
+        >
+          <div className="mb-2 font-semibold">
+            Build details are no longer available on the server.
+          </div>
+          <div style={{ color: 'var(--muted-color)' }}>
+            This row is only in local history. The backend was likely
+            restarted since the build ran — logs and artifacts for it are
+            no longer served. You can still delete it from the list or
+            open the Jenkins link if one was captured.
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
