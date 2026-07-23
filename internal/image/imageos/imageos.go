@@ -1452,12 +1452,21 @@ func buildImageUKI(installRoot string, template *config.ImageTemplate) error {
 		case "x86_64":
 			log.Infof("Target architecture is x86_64, proceeding with bootloader copy")
 			// 3. Copy systemd-bootx64.efi to ESP/EFI/BOOT/BOOTX64.EFI
-			srcBootloader = filepath.Join("usr", "lib", "systemd", "boot", "efi", "systemd-bootx64.efi")
+			//
+			// LEADING SLASH IS REQUIRED. `cp` runs under `sudo chroot <installRoot>
+			// cp <src> <dst>`; the chroot inherits the calling process's cwd, which
+			// on Jenkins workers is the pipeline workspace, NOT `/`. A relative
+			// "usr/lib/..." then resolves against that inherited cwd and misses.
+			// See copyBootloader's docstring at line ~1952: "src and dst should be
+			// absolute paths inside the chroot" — the original code violated that
+			// invariant.
+			srcBootloader = filepath.Join("/", "usr", "lib", "systemd", "boot", "efi", "systemd-bootx64.efi")
 			dstBootloader = filepath.Join(espDir, "EFI", "BOOT", "BOOTX64.EFI")
 		case "aarch64":
 			log.Infof("Target architecture is ARM64, proceeding with bootloader copy")
-			// 3. Copy systemd-bootx64.efi to ESP/EFI/BOOT/BOOT64.EFI
-			srcBootloader = filepath.Join("usr", "lib", "systemd", "boot", "efi", "systemd-bootaa64.efi")
+			// 3. Copy systemd-bootaa64.efi to ESP/EFI/BOOT/BOOTAA64.EFI
+			// (Same absolute-path invariant as x86_64 above.)
+			srcBootloader = filepath.Join("/", "usr", "lib", "systemd", "boot", "efi", "systemd-bootaa64.efi")
 			dstBootloader = filepath.Join(espDir, "EFI", "BOOT", "BOOTAA64.EFI")
 		default:
 			log.Infof("Skipping bootloader copy for architecture: %s", template.Target.Arch)
