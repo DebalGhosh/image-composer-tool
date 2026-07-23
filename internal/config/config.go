@@ -808,22 +808,11 @@ func (t *ImageTemplate) SaveUpdatedConfigFile(path string) error {
 		return fmt.Errorf("failed to create directory for config file: %w", err)
 	}
 
-	// Marshal the template to YAML
-	data, err := yaml.Marshal(t)
+	// Marshal to YAML (includes the block-scalar-header repair).
+	data, err := MarshalTemplateYAML(t)
 	if err != nil {
-		log.Errorf("Error marshaling image template to YAML: %v", err)
-		return fmt.Errorf("error marshaling template to YAML: %w", err)
-	}
-
-	if err := validateYAMLBytes(data); err != nil {
-		log.Warnf("Generated YAML is not parseable, applying block scalar header fix: %v", err)
-
-		data = fixInvalidBlockScalarHeader(data)
-
-		if validateErr := validateYAMLBytes(data); validateErr != nil {
-			log.Errorf("Generated YAML remains invalid after block scalar header fix: %v", validateErr)
-			return fmt.Errorf("generated YAML is invalid after block scalar header fix: %w", validateErr)
-		}
+		log.Errorf("Failed to marshal image template: %v", err)
+		return err
 	}
 
 	// Write file safely with symlink protection

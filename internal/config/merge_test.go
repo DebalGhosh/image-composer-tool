@@ -1501,7 +1501,7 @@ func TestRedactSensitiveDataFDEPassphrase(t *testing.T) {
 		},
 	}
 
-	redacted := redactSensitiveData(template)
+	redacted := RedactSensitiveData(template)
 	if redacted.SystemConfig.FDE.Passphrase != "[REDACTED]" {
 		t.Errorf("redacted FDE passphrase = %q, want [REDACTED]", redacted.SystemConfig.FDE.Passphrase)
 	}
