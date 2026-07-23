@@ -1957,11 +1957,32 @@ func buildUKI(installRoot, kernelPath, initrdPath, cmdlineFile, outputPath strin
 	return err
 }
 
-// Helper to copy the bootloader EFI file
+// Helper to copy the bootloader EFI file.
+//
+// src and dst are absolute paths inside the chroot
+// (e.g., /usr/lib/systemd/boot/efi/systemd-bootx64.efi
+// and /boot/efi/EFI/BOOT/BOOTX64.EFI).
+//
+// Deliberate-purge case: some templates install systemd-boot to get its
+// postinst behavior (which populates /boot/efi/EFI/BOOT/BOOTX64.EFI) and
+// then run `dpkg --purge systemd-boot systemd-boot-efi` from their
+// configurations[] list — usually because the template pins a custom
+// bootloader path (grub, shim, etc.) and doesn't want systemd-boot's
+// files hanging around in /usr/lib/systemd/boot/efi. When we reach this
+// step post-purge, src is gone but dst was already placed by postinst.
+// In that case treat the copy as a no-op success instead of failing.
+// Only the src-missing-AND-dst-present shape is benign; every other
+// failure (permission, disk full, dst unwriteable, corrupt src) still
+// bubbles up as before.
 func copyBootloader(installRoot, src, dst string) error {
-	// src and dst should be absolute paths inside the chroot
-	// (e.g., /usr/lib/systemd/boot/efi/systemd-bootx64.efi
-	// and /boot/efi/EFI/BOOT/BOOTX64.EFI)
+	dstHostPath := filepath.Join(installRoot, dst)
+	if info, dstErr := os.Stat(dstHostPath); dstErr == nil && info.Size() > 0 {
+		if _, srcErr := os.Stat(filepath.Join(installRoot, src)); os.IsNotExist(srcErr) {
+			log.Infof("Bootloader src %s is absent but dst %s (%d bytes) already exists — assuming template purged systemd-boot after postinst placed the EFI binary; skipping cp.", src, dst, info.Size())
+			return nil
+		}
+	}
+
 	cmd := fmt.Sprintf("cp %s %s", src, dst)
 	if _, err := shell.ExecCmd(cmd, true, installRoot, nil); err != nil {
 		log.Errorf("Failed to copy bootloader from %s to %s: %v", src, dst, err)
