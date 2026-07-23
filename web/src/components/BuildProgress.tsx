@@ -8,6 +8,17 @@
 // back (covers the Artifactory upload, which for our images typically takes
 // 1-2 minutes AFTER ICT reports "Done"). Colours are driven by our CSS
 // variables so the stepper sits correctly in both light and dark themes.
+//
+// Compact-labels design (per user request 2026-07-23):
+//   * Only the currently-active step shows its text label — inactive steps
+//     collapse to just the numbered circle.
+//   * As phase advances, the active step's label collapses (max-width → 0,
+//     opacity → 0) while the newly-active step's label expands from 0 to its
+//     natural width, giving a horizontal "sliding" effect.
+//   * Circle background and connector color transition on the same 300ms
+//     ease-out so the whole row shifts state as one motion.
+//   * A failed step keeps its label so the user can still see WHERE the
+//     build stopped without hovering; the circle turns red with an ✕.
 
 interface BuildProgressProps {
   // Current phase id (one of PHASES.id).
@@ -18,15 +29,21 @@ interface BuildProgressProps {
   failed?: boolean
 }
 
-const PHASES: { id: string; label: string; short: string }[] = [
-  { id: 'dispatching', label: 'Dispatching', short: 'Dispatch' },
-  { id: 'preparing', label: 'Preparing', short: 'Prepare' },
-  { id: 'packages', label: 'Resolving & downloading packages', short: 'Packages' },
-  { id: 'installing', label: 'Installing packages', short: 'Install' },
-  { id: 'generating', label: 'Generating image', short: 'Generate' },
-  { id: 'publishing', label: 'Publishing artifacts', short: 'Publish' },
-  { id: 'done', label: 'Done', short: 'Done' },
+const PHASES: { id: string; label: string }[] = [
+  { id: 'dispatching', label: 'Dispatching' },
+  { id: 'preparing', label: 'Preparing' },
+  { id: 'packages', label: 'Resolving & downloading packages' },
+  { id: 'installing', label: 'Installing packages' },
+  { id: 'generating', label: 'Generating image' },
+  { id: 'publishing', label: 'Publishing artifacts' },
+  { id: 'done', label: 'Done' },
 ]
+
+// Shared transition duration for every animating property in the stepper so
+// the whole row moves as one visual event. 300ms is fast enough that the
+// operator perceives it as "phase changed" rather than a decorative
+// animation, but slow enough that the sliding label is legible.
+const TRANSITION = 'all 300ms ease-out'
 
 export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
   const currentIdx = Math.max(
@@ -46,71 +63,98 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
       aria-valuemin={1}
       aria-valuemax={PHASES.length}
       aria-label={`Build phase: ${PHASES[currentIdx]?.label ?? 'unknown'}`}
+      aria-live="polite"
     >
-      <ol className="flex flex-wrap items-center gap-x-1 gap-y-2">
+      <ol className="flex flex-wrap items-center gap-y-2">
         {PHASES.map((p, i) => {
           const done = i < currentIdx
           const active = i === currentIdx && phase !== 'done'
           const complete = phase === 'done' && i === PHASES.length - 1
           const isFailed = failed && i === currentIdx
+          // Label is visible only when the step is the current phase (running
+          // OR failed on it). Everything else shows just the circle.
+          const showLabel = active
 
-          // Circle background: red on failure, green when complete, blue
-          // when active (with pulse), muted when future.
-          const circleStyle: React.CSSProperties = isFailed
-            ? { background: 'var(--danger)', color: '#fff' }
-            : done || complete
-              ? { background: 'var(--success, #16a34a)', color: '#fff' }
+          // Circle colour cascade: failure > done/complete > active > future.
+          // All four states use the same TRANSITION so a step going
+          // future→active→done glides through blue then green.
+          const circleStyle: React.CSSProperties = {
+            transition: TRANSITION,
+            ...(isFailed
+              ? { background: 'var(--danger)', color: '#fff' }
+              : done || complete
+                ? { background: 'var(--success, #16a34a)', color: '#fff' }
+                : active
+                  ? { background: 'var(--classic-blue)', color: '#fff' }
+                  : {
+                      background:
+                        'color-mix(in srgb, var(--muted-color) 20%, var(--section-background))',
+                      color: 'var(--muted-color)',
+                    }),
+          }
+
+          const labelStyle: React.CSSProperties = {
+            transition: TRANSITION,
+            color: isFailed
+              ? 'var(--danger)'
               : active
-                ? { background: 'var(--classic-blue)', color: '#fff' }
-                : {
-                    background:
-                      'color-mix(in srgb, var(--muted-color) 20%, var(--section-background))',
-                    color: 'var(--muted-color)',
-                  }
-
-          const labelStyle: React.CSSProperties = active
-            ? { color: 'var(--font-color)', fontWeight: 600 }
-            : done || complete
-              ? { color: 'var(--font-color)' }
-              : { color: 'var(--muted-color)' }
+                ? 'var(--font-color)'
+                : 'var(--muted-color)',
+            fontWeight: active || isFailed ? 600 : 400,
+            // A tall max-width upper bound so any real label fits; the
+            // browser's overflow:hidden + whitespace-nowrap clip anything
+            // longer. Actual reveal happens as fast as the text's intrinsic
+            // width allows, which is what matters visually.
+            maxWidth: showLabel ? '400px' : '0px',
+            opacity: showLabel ? 1 : 0,
+            marginLeft: showLabel ? '0.375rem' : '0px',
+            // will-change gives the browser a hint to promote this element
+            // to its own compositing layer — smoother max-width/opacity
+            // animation on lower-end laptops without any measurable cost.
+            willChange: 'max-width, opacity, margin-left',
+          }
 
           const connectorStyle: React.CSSProperties = {
             background: done
               ? 'var(--success, #16a34a)'
               : 'color-mix(in srgb, var(--muted-color) 30%, transparent)',
+            transition: TRANSITION,
           }
 
           return (
             <li key={p.id} className="flex items-center">
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ' +
-                    (active ? 'animate-pulse' : '')
-                  }
-                  style={circleStyle}
-                  aria-hidden="true"
-                >
-                  {isFailed ? '✕' : done || complete ? '✓' : i + 1}
-                </span>
-                <span className="text-[11px]" style={labelStyle}>
-                  {/* Full label on md+, short label on small screens */}
-                  <span className="hidden md:inline">{p.label}</span>
-                  <span className="md:hidden">{p.short}</span>
-                  {/* Live counter during the install phase */}
-                  {active && p.id === 'installing' && install.total > 0 && (
-                    <span
-                      className="ml-1 font-normal"
-                      style={{ color: 'var(--muted-color)' }}
-                    >
-                      ({install.done}/{install.total})
-                    </span>
-                  )}
-                </span>
-              </div>
+              <span
+                className={
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ' +
+                  (active ? 'animate-pulse' : '')
+                }
+                style={circleStyle}
+                aria-hidden="true"
+              >
+                {isFailed ? '✕' : done || complete ? '✓' : i + 1}
+              </span>
+              <span
+                className="inline-block overflow-hidden whitespace-nowrap text-[11px]"
+                style={labelStyle}
+                aria-hidden={!showLabel}
+              >
+                {p.label}
+                {/* Live install counter — rendered inside the same label
+                    element so it slides in with the label, not as a
+                    separate DOM node that could pop in half a frame
+                    later. */}
+                {p.id === 'installing' && install.total > 0 && (
+                  <span
+                    className="ml-1 font-normal"
+                    style={{ color: 'var(--muted-color)' }}
+                  >
+                    ({install.done}/{install.total})
+                  </span>
+                )}
+              </span>
               {i < PHASES.length - 1 && (
                 <span
-                  className="mx-1.5 hidden h-px w-4 sm:inline-block lg:w-6"
+                  className="mx-2 hidden h-px w-6 sm:inline-block lg:w-10"
                   style={connectorStyle}
                   aria-hidden="true"
                 />
