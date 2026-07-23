@@ -18,10 +18,25 @@ import (
 )
 
 const (
-	maxDownloadAttempts = 3
+	// Bumped from 3 → 5. The Release file fetch is high-cost-to-fail:
+	// a single missed Release skips the whole repo (see download.go:584
+	// "Failed to parse repository ..."), which downstream turns 12 core
+	// packages into "not found in repo" and the build dies. Two extra
+	// attempts + exponential backoff give transient CDN hiccups a much
+	// better chance to clear before we give up on a repo.
+	maxDownloadAttempts = 5
 	initialRetryBackoff = 500 * time.Millisecond
 )
 
+// shouldRetryHTTPStatus decides which HTTP status codes are worth retrying.
+// Standard 5xx flakes (500/502/503/504) plus 408/425/429 rate-limit family.
+//
+// The 520-527 range is Cloudflare/CDN-specific ("Web server returned an
+// unknown error" through "SSL handshake failed"). archive.ubuntu.com is
+// fronted by Cloudflare on some routes and has been observed serving 520
+// under Intel-network egress load. These aren't in Go's net/http constant
+// set so they're referenced by number. All are semantically transient —
+// the upstream origin is fine, the CDN edge is confused.
 func shouldRetryHTTPStatus(statusCode int) bool {
 	switch statusCode {
 	case http.StatusRequestTimeout,
@@ -32,9 +47,12 @@ func shouldRetryHTTPStatus(statusCode int) bool {
 		http.StatusServiceUnavailable,
 		http.StatusGatewayTimeout:
 		return true
-	default:
-		return false
 	}
+	// Cloudflare / generic CDN transient errors — always retriable.
+	if statusCode >= 520 && statusCode <= 527 {
+		return true
+	}
+	return false
 }
 
 func downloadWithRetry(client *http.Client, url, destPath string, threadcontext int) error {
