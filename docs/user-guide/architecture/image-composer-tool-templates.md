@@ -46,7 +46,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
     - [Chain Resolution](#chain-resolution)
     - [Limitations and Validation Rules](#limitations-and-validation-rules)
     - [Debugging an Extends Chain](#debugging-an-extends-chain)
-    - [Related Documentation](#related-documentation)
+    - [See Also](#see-also)
   - [Variable Substitution](#variable-substitution)
 - [WSL Required Fields](#wsl-required-fields)
 - [Package Repositories](#package-repositories)
@@ -54,7 +54,7 @@ For a conceptual overview of how templates fit into the build pipeline, see
   - [Priority Behavior](#priority-behavior)
   - [AllowPackages White List](#allowpackages-white-list)
 - [Best Practices](#best-practices)
-- [Related Documentation](#related-documentation-1)
+- [Related Documentation](#related-documentation)
 
 ## What Are Templates and How Do They Work?
 
@@ -937,7 +937,7 @@ redacted so the output is safe to paste into an issue or a code review.
 See [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command)
 for the full CLI reference.
 
-### Related Documentation
+### See Also
 
 - [ADR: template `extends`](../../architecture-decision-record/adr-template-extends.md) — design rationale and full validation matrix
 - [Resolve Command](./image-composer-tool-cli-specification.md#resolve-command) — CLI reference for `image-composer-tool resolve`
