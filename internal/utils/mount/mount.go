@@ -371,7 +371,11 @@ func UmountSysfs(mountPoint string) error {
 	return nil
 }
 
-// CleanSysfs cleans up system directories in the chroot environment
+// CleanSysfs cleans up system directories in the chroot environment.
+//
+// Contract: callers must unmount run/sys/proc/dev first. Cleanup then removes
+// those top-level directories via rmdir, which requires each directory to be
+// present and empty. Missing/non-empty directories are returned as errors.
 func CleanSysfs(mountPoint string) error {
 	var pathList []string
 	mountPathList, err := GetMountPathList()
@@ -388,7 +392,14 @@ func CleanSysfs(mountPoint string) error {
 	for _, _mountPoint := range []string{"run", "sys", "proc", "dev"} {
 		fullPath := filepath.Join(mountPoint, _mountPoint)
 		if !slice.Contains(pathList, fullPath) {
-			if _, err := shell.ExecCmd("rm -rf "+fullPath, true, shell.HostPath, nil); err != nil {
+			// Use rmdir (not rm -rf) here: "dev" is mounted with devtmpfs, which is a
+			// single kernel-wide filesystem instance shared across every mountpoint of
+			// that type. If the "still mounted" check above is ever wrong (e.g. mtab
+			// parsing mismatch), a recursive rm -rf on this path would actually delete
+			// the host's real /dev entries (e.g. /dev/null, /dev/ptmx). rmdir only
+			// succeeds on an empty directory, so a false negative fails loudly instead
+			// of destroying host device nodes.
+			if _, err := shell.ExecCmd("rmdir "+shell.QuoteArg(fullPath), true, shell.HostPath, nil); err != nil {
 				return fmt.Errorf("failed to remove path %s: %w", fullPath, err)
 			}
 		} else {
