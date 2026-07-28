@@ -6,6 +6,7 @@ import type {
   ComposeResponse,
   BuildAccepted,
   BuildDetails,
+  CancelAccepted,
   HistoryItem,
   Artifact,
 } from './types'
@@ -49,10 +50,16 @@ export const api = {
   listBuilds: () =>
     jsonFetch<{ builds: HistoryItem[] }>('/builds').then((r) => r.builds),
 
-  // Cancel an in-flight build. The endpoint arrives with Story 3; until then the
-  // backend returns 404 and the caller surfaces that as a cancel failure.
+  // Cancel an in-flight build. Returns 202 with the cancelling status; the
+  // terminal state (cancelled/failed) then arrives over SSE. 409 if the build is
+  // not running (already finished, or a cancel is already in flight). A 202 whose
+  // body carries `residual` means the cancel was accepted but the signal could
+  // not be delivered — the caller must surface that, since no terminal SSE event
+  // may follow.
   cancelBuild: (buildId: string) =>
-    jsonFetch<void>(`/builds/${buildId}/cancel`, { method: 'POST' }),
+    jsonFetch<CancelAccepted>(`/builds/${buildId}/cancel`, {
+      method: 'POST',
+    }),
 
   // Build command + resolved paths for the troubleshoot panel.
   buildDetails: (buildId: string) =>

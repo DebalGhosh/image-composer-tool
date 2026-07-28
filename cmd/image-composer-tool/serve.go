@@ -43,9 +43,19 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 	serveCmd.Flags().StringVar(&serveWorkDir, "work-dir", "webui-workspace", "Base directory for per-build work/output directories")
 	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
 		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
-			"Grant a scoped, passwordless sudoers rule for the ICT binary only, "+
-			"e.g. `<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *` "+
-			"— do not give the service blanket sudo.")
+			"Grant scoped, passwordless sudoers rules for the ICT binary only — do not "+
+			"give the service blanket sudo. Two rules are needed:\n"+
+			"  <svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *\n"+
+			"  <svc-user> ALL=(root) NOPASSWD: /usr/bin/kill -TERM -[0-9]*\n"+
+			"The second rule lets the (non-root) server cancel a build by signalling the "+
+			"root-owned build process group; without it, cancellation cannot deliver "+
+			"SIGTERM across the sudo boundary. Adjust the kill path (e.g. /bin/kill) to "+
+			"your distro. SECURITY: the pgid isn't known ahead of time, so sudoers "+
+			"cannot scope it — this rule grants the service user root SIGTERM to ANY "+
+			"process group, including `kill -TERM -1` (every process on the host). The "+
+			"signal is limited to TERM. Accept this deliberately, or run the server as "+
+			"root on an isolated build host (no kill rule needed), or omit the rule and "+
+			"accept that Cancel reports a cancellation-failure. See web/README.md.")
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")
