@@ -12,8 +12,7 @@
 #   4. open http://localhost:5173
 #
 # Stop:
-#   docker compose down                 # keep the workspace volume
-#   docker compose down --volumes       # nuke the workspace too
+#   docker compose down
 
 # ------------------------------------------------------------------------------
 
@@ -45,11 +44,6 @@ services:
       HTTP_PROXY:  ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY:    ${NO_PROXY:-}
-    volumes:
-      # Persist per-build workspace state (template.yml, log buffers)
-      # across container restarts. Ephemeral in the dispatch-only path,
-      # but nice-to-have during triage.
-      - ict-workspace:/app/webui-workspace
     networks:
       - ict-ui
     restart: unless-stopped
@@ -70,6 +64,15 @@ services:
       # host (the Vite dev-server default). Container-side is fixed at
       # 8080 because nginx-unprivileged listens there.
       - "5173:8080"
+    environment:
+      # nginx templates `upstream backend { server ${BACKEND_URL}; }` at
+      # container start via envsubst (see Dockerfile.frontend + the
+      # NGINX_ENVSUBST_FILTER whitelist). For the local compose topology
+      # that's just the sibling service name; a CaaS deployment sets
+      # this to the routable host:port of the backend service (e.g.
+      # `ict-backend.internal:8080` or the DNS name of a Kubernetes
+      # Service).
+      BACKEND_URL: ${BACKEND_URL:-backend:8080}
     depends_on:
       backend:
         condition: service_healthy
@@ -81,6 +84,3 @@ services:
 networks:
   ict-ui:
     driver: bridge
-
-volumes:
-  ict-workspace:

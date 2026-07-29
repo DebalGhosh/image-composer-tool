@@ -4,7 +4,13 @@
 # build-log stream) to the backend service. Same-origin, so the Go
 # server needs no CORS middleware.
 #
-# Two subtle things that MUST be right for the SSE log stream to work:
+# The backend upstream is templated: envsubst renders ${BACKEND_URL} at
+# container start (see Dockerfile.frontend) so a CaaS deployment can
+# point the frontend at any reachable backend host:port without a
+# rebuild. Compose sets it to `backend:8080` (the sibling service
+# name) for local runs.
+#
+# Three subtle things that MUST be right for the SSE log stream to work:
 #
 #   1. proxy_buffering off  — otherwise nginx accumulates the SSE bytes in
 #      its own buffer and the browser sees the log all at once at the end,
@@ -17,7 +23,7 @@
 #      the backend's SSE writer flushes per event, not per response body.
 
 upstream backend {
-    server backend:8080;
+    server ${BACKEND_URL};
     keepalive 16;
 }
 

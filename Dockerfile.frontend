@@ -42,11 +42,25 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 # 8080 instead of 80 (no privileged port bind needed). That's why the
 # published port on the host is what you choose in compose, not fixed at 80.
 
-# Custom server config: SPA fallback + /api reverse-proxy tuned for SSE.
-# `--chown=nginx:nginx` keeps ownership correct so the non-root nginx
-# worker can read the file.
-COPY --chown=nginx:nginx docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+# Server config is TEMPLATED — the backend upstream host:port is rendered
+# from ${BACKEND_URL} at container start. This lets a CaaS deployment
+# retarget the frontend at any reachable backend without a rebuild.
+#
+# Rendering is handled by the base image's own entrypoint scripts under
+# /docker-entrypoint.d/: files placed in /etc/nginx/templates/*.template
+# are run through envsubst into /etc/nginx/conf.d/<name>. NGINX_ENVSUBST_FILTER
+# whitelists exactly ONE variable so nginx's own `$host`, `$scheme`,
+# `$remote_addr`, etc. in the template pass through untouched — without
+# this filter envsubst would try to substitute them too.
+COPY --chown=nginx:nginx docker/nginx/default.conf.template \
+     /etc/nginx/templates/default.conf.template
 COPY --from=build --chown=nginx:nginx /web/dist /usr/share/nginx/html
+
+# Defaults so `docker run` without compose still boots against a sibling
+# service named `backend`. Real deployments override BACKEND_URL via -e
+# / compose environment.
+ENV BACKEND_URL=backend:8080 \
+    NGINX_ENVSUBST_FILTER=^BACKEND_URL$
 
 EXPOSE 8080
 
@@ -54,4 +68,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget --quiet --tries=1 --spider http://127.0.0.1:8080/ || exit 1
 
 # nginx-unprivileged already sets CMD ["nginx", "-g", "daemon off;"] and
-# runs as UID 101. Leaving the base CMD alone.
+# runs as UID 101. The base image invokes /docker-entrypoint.d/*.sh on
+# start (including 20-envsubst-on-templates.sh which renders our
+# BACKEND_URL substitution). Leaving both untouched.

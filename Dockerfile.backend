@@ -79,10 +79,10 @@ COPY --from=build /out/image-composer-tool /usr/local/bin/image-composer-tool
 COPY --chown=ict:ict image-composer-tool.yml /app/image-composer-tool.yml
 COPY --chown=ict:ict image-templates       /app/image-templates
 
-# Per-build work/cache dirs. The dispatch-only path only writes template.yml
-# and the tracker's log buffer — small, ephemeral. Mount a volume here in
-# compose if you want the work dirs to survive container restart.
-RUN mkdir -p /app/webui-workspace /app/logs && \
+# Log directory only — the dispatch-only backend has no per-build work/cache
+# state on disk (template YAML lives on the in-memory build record; artifacts
+# live in Artifactory).
+RUN mkdir -p /app/logs && \
     chown -R ict:ict /app
 
 USER ict
@@ -103,5 +103,4 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["image-composer-tool", "serve", \
      "--host", "0.0.0.0", \
      "--port", "8080", \
-     "--templates-dir", "/app/image-templates", \
-     "--work-dir", "/app/webui-workspace"]
+     "--templates-dir", "/app/image-templates"]
