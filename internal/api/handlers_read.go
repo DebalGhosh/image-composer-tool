@@ -55,8 +55,8 @@ type composeResponse struct {
 }
 
 // buildComposeSummary constructs a composeSummary from a request and a merged
-// template. Extracted so handleStartBuild can reuse it to store the summary on
-// the build record for display in the Build Details panel.
+// template. Extracted so the Jenkins dispatch handler can reuse it to store
+// the summary on the build record for display in the Build Details panel.
 func buildComposeSummary(req composeRequest, merged *config.ImageTemplate) composeSummary {
 	return composeSummary{
 		Vertical:  req.Vertical,

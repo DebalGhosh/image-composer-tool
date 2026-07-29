@@ -15,16 +15,14 @@ var (
 	serveHost      string
 	servePort      string
 	serveTemplates string
-	serveBinary    string
-	serveWorkDir   string
-	serveSudo      bool
 	serveManifest  string
 
 	// Jenkins dispatch. When JENKINS_URL/USER/TOKEN are set (either via env
 	// vars or --jenkins-* flags), the /api/v1/jenkins/dispatch endpoint fans
 	// the UI's Build button out to a randomly-picked idle worker in the
-	// configured folder. When unset, the Jenkins endpoints return 503 and the
-	// server behaves like the upstream (local-build) build.
+	// configured folder. When any of the three is unset, the endpoint
+	// returns 503 and no builds can be triggered — this backend has no
+	// local-build fallback.
 	serveJenkinsURL     string
 	serveJenkinsUser    string
 	serveJenkinsToken   string
@@ -43,8 +41,8 @@ func createServeCommand() *cobra.Command {
 		Short: "Run the web UI backend API server",
 		Long: `Start the HTTP API that backs the ICT web UI.
 
-Serves the configuration manifest, resolves pre-authored templates, and triggers
-image builds via the image-composer-tool binary with streaming build logs.`,
+Serves the configuration manifest, resolves pre-authored templates, and
+dispatches image builds to a Jenkins worker farm with streaming build logs.`,
 		RunE: executeServe,
 	}
 
@@ -53,15 +51,6 @@ image builds via the image-composer-tool binary with streaming build logs.`,
 			"interfaces (not recommended — this API can trigger privileged builds).")
 	serveCmd.Flags().StringVarP(&servePort, "port", "p", "8080", "Port to listen on")
 	serveCmd.Flags().StringVar(&serveTemplates, "templates-dir", "image-templates", "Directory of pre-authored templates")
-	serveCmd.Flags().StringVar(&serveBinary, "ict-binary", "",
-		"Path to the image-composer-tool binary used for builds. "+
-			"If empty, auto-detects ./build/image-composer-tool, then ./image-composer-tool, then $PATH.")
-	serveCmd.Flags().StringVar(&serveWorkDir, "work-dir", "webui-workspace", "Base directory for per-build work/output directories")
-	serveCmd.Flags().BoolVar(&serveSudo, "sudo", false,
-		"Run builds under `sudo -n` (ICT requires root for chroot/mount). "+
-			"Grant a scoped, passwordless sudoers rule for the ICT binary only, "+
-			"e.g. `<svc-user> ALL=(root) NOPASSWD: /path/to/image-composer-tool build *` "+
-			"— do not give the service blanket sudo.")
 	serveCmd.Flags().StringVar(&serveManifest, "manifest", "",
 		"Path to a manifest YAML to read from disk (live-editable, no rebuild). "+
 			"When empty, the manifest embedded at build time is used.")
@@ -99,9 +88,6 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		// net.JoinHostPort brackets IPv6 hosts correctly (e.g. [::1]:8080).
 		Addr:               net.JoinHostPort(serveHost, servePort),
 		TemplatesDir:       serveTemplates,
-		ICTBinary:          serveBinary,
-		WorkDir:            serveWorkDir,
-		Sudo:               serveSudo,
 		ManifestPath:       serveManifest,
 		JenkinsURL:         serveJenkinsURL,
 		JenkinsUser:        serveJenkinsUser,

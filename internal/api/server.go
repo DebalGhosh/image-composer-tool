@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package api implements the HTTP backend for the ICT web UI. It serves a
-// configuration manifest, resolves pre-authored templates, and triggers image
-// builds via the ICT binary — see docs/architecture-decision-record/adr-web-ui-tech-stack.md.
+// configuration manifest, resolves pre-authored templates, and fans image
+// builds out to a Jenkins worker fleet — see
+// docs/architecture-decision-record/adr-web-ui-tech-stack.md.
 package api
 
 import (
 	"net/http"
-	"os"
-	"os/exec"
 	"time"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
@@ -19,14 +18,13 @@ import (
 type Config struct {
 	Addr         string // listen address, e.g. ":8080"
 	TemplatesDir string // directory containing pre-authored templates
-	ICTBinary    string // path to the image-composer-tool binary for builds
-	WorkDir      string // base directory for per-build work/output directories
-	Sudo         bool   // run builds under `sudo -n` (ICT needs root for chroot)
 	ManifestPath string // optional manifest file; empty uses the embedded copy
 
 	// Jenkins dispatch. When all three of JenkinsURL/JenkinsUser/JenkinsToken
 	// are set, the /api/v1/jenkins/dispatch endpoint fans builds out to the
-	// worker fleet under JenkinsWorkersPath instead of executing them locally.
+	// worker fleet under JenkinsWorkersPath. When unset, the endpoint returns
+	// 503 and no builds can be triggered — this backend has no local-build
+	// fallback.
 	JenkinsURL         string // e.g. https://cje-pg-prod01.devtools.intel.com/nex-cisv-devops02
 	JenkinsUser        string
 	JenkinsToken       string
@@ -56,12 +54,6 @@ func New(cfg Config) (*Server, error) {
 	if cfg.TemplatesDir == "" {
 		cfg.TemplatesDir = "image-templates"
 	}
-	if cfg.ICTBinary == "" {
-		cfg.ICTBinary = discoverICTBinary()
-	}
-	if cfg.WorkDir == "" {
-		cfg.WorkDir = "webui-workspace"
-	}
 	return &Server{
 		cfg:      cfg,
 		manifest: m,
@@ -69,25 +61,6 @@ func New(cfg Config) (*Server, error) {
 		jenkins:  newJenkinsClient(cfg),
 		packages: loadPackageIndex(cfg.PackagesDir),
 	}, nil
-}
-
-// discoverICTBinary picks the image-composer-tool binary to invoke when the
-// operator doesn't pass --ict-binary. We don't know whether they built with
-// `earthly +build` (outputs ./build/) or a plain `go build` (often the repo
-// root), so probe both, preferring ./build/, then fall back to a PATH lookup.
-func discoverICTBinary() string {
-	candidates := []string{"./build/image-composer-tool", "./image-composer-tool"}
-	for _, c := range candidates {
-		if fi, err := os.Stat(c); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
-			return c
-		}
-	}
-	if p, err := exec.LookPath("image-composer-tool"); err == nil {
-		return p
-	}
-	// Nothing found; return the conventional path so the eventual build failure
-	// names a sensible location.
-	return "./build/image-composer-tool"
 }
 
 // Start registers routes and blocks serving HTTP.

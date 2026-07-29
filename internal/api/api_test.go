@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -53,7 +52,7 @@ func newTestServer(t *testing.T) *Server {
 		}
 	}
 	return &Server{
-		cfg:      Config{TemplatesDir: dir, ICTBinary: "/bin/true", WorkDir: t.TempDir()},
+		cfg:      Config{TemplatesDir: dir},
 		manifest: testManifest(),
 		tracker:  newBuildTracker(),
 	}
@@ -279,55 +278,20 @@ func TestFinishFailure(t *testing.T) {
 	}
 }
 
-// --- build command / template resolution (no real exec) ---
+// --- classifyArtifact (used by the Jenkins artifact enumeration) ---
 
-func TestBuildCommand(t *testing.T) {
-	s := &Server{cfg: Config{ICTBinary: "/opt/ict"}}
-	name, args := s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	if name != "/opt/ict" || args[0] != "build" || args[1] != "/tmp/t.yml" {
-		t.Fatalf("non-sudo cmd = %s %v", name, args)
+func TestClassifyArtifact(t *testing.T) {
+	cases := map[string]string{
+		"minimal-os-image-ubuntu-26.04.raw.gz":  "image",
+		"minimal-os-image-ubuntu-26.04.vhdx":    "image",
+		"spdx_manifest_deb_minimal.json":        "sbom",
+		"my-sbom.txt":                           "sbom",
+		"random.iso":                            "image",
 	}
-	if !slices.Contains(args, "--cache-dir") || !slices.Contains(args, "/tmp/cd") {
-		t.Fatalf("missing --cache-dir in %v", args)
-	}
-
-	s.cfg.Sudo = true
-	name, args = s.buildCommand("/tmp/t.yml", "/tmp/wd", "/tmp/cd")
-	if name != "sudo" || args[0] != "-n" || args[1] != "/opt/ict" || args[2] != "build" {
-		t.Fatalf("sudo cmd = %s %v", name, args)
-	}
-}
-
-func TestResolveBuildTemplate(t *testing.T) {
-	s := newTestServer(t)
-	wd := t.TempDir()
-
-	// compose path -> manifest lookup
-	path, name, err := s.resolveBuildTemplate(&buildRequest{Compose: &composeRequest{
-		Vertical: "robotics", SKU: "amr", Platform: "wcl", OS: "ubuntu24", ImageType: "iso",
-	}}, wd)
-	if err != nil || name != "robotics.yml" || !strings.HasSuffix(path, "robotics.yml") {
-		t.Fatalf("compose resolve = %q %q %v", path, name, err)
-	}
-
-	// yaml path -> writes template.yml into the work dir
-	path, name, err = s.resolveBuildTemplate(&buildRequest{YAML: "image:\n  name: x\n"}, wd)
-	if err != nil || name != "template.yml" {
-		t.Fatalf("yaml resolve = %q %q %v", path, name, err)
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		t.Fatalf("yaml template not written: %v", statErr)
-	}
-
-	// neither -> error
-	if _, _, err := s.resolveBuildTemplate(&buildRequest{}, wd); err == nil {
-		t.Fatal("expected error when neither compose nor yaml provided")
-	}
-	// no match -> error
-	if _, _, err := s.resolveBuildTemplate(&buildRequest{Compose: &composeRequest{
-		Vertical: "robotics", Platform: "ptl", OS: "ubuntu24", ImageType: "iso",
-	}}, wd); err == nil {
-		t.Fatal("expected error for unmatched combination")
+	for name, want := range cases {
+		if got := classifyArtifact(name); got != want {
+			t.Errorf("classifyArtifact(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -336,7 +300,7 @@ func TestResolveBuildTemplate(t *testing.T) {
 func TestHandleBuildArtifacts(t *testing.T) {
 	s := newTestServer(t)
 	b := &build{ID: "b1", done: make(chan struct{})}
-	b.finish(statusSuccess, []artifact{{Name: "img", Type: "image", Path: "/o/img"}}, "")
+	b.finish(statusSuccess, []artifact{{Name: "img", Type: "image", URL: "https://jenkins/artifact/img"}}, "")
 	s.tracker.add(b)
 
 	// present
@@ -442,16 +406,12 @@ func TestRecoverPanic(t *testing.T) {
 // --- server construction + routing ---
 
 func TestNewAndRoutes(t *testing.T) {
-	s, err := New(Config{TemplatesDir: t.TempDir(), WorkDir: t.TempDir()})
+	s, err := New(Config{TemplatesDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if s.manifest == nil || s.tracker == nil {
 		t.Fatal("server not fully initialized")
-	}
-	// New applies defaults.
-	if s.cfg.ICTBinary == "" {
-		t.Error("ICTBinary default not applied")
 	}
 
 	// Routed manifest request works end to end through the mux + middleware.
@@ -481,60 +441,7 @@ func TestSendEvent(t *testing.T) {
 	}
 }
 
-// --- discoverArtifacts (filesystem fallback) ---
-
-func TestDiscoverArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	// nested layout mirroring ICT output
-	sub := filepath.Join(dir, "ubuntu-x86_64", "imagebuild", "minimal")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	for _, f := range []string{
-		"minimal.raw.gz",    // image
-		"minimal.sbom.json", // sbom (name contains "sbom")
-		"notes.txt",         // ignored
-	} {
-		if err := os.WriteFile(filepath.Join(sub, f), []byte("x"), 0o644); err != nil {
-			t.Fatalf("write %s: %v", f, err)
-		}
-	}
-	got := discoverArtifacts(dir)
-	var img, sbom int
-	for _, a := range got {
-		switch a.Type {
-		case "image":
-			img++
-		case "sbom":
-			sbom++
-		}
-	}
-	if img != 1 || sbom != 1 {
-		t.Fatalf("discoverArtifacts found image=%d sbom=%d (%+v)", img, sbom, got)
-	}
-}
-
-// --- handleStartBuild early-return error paths (no build spawned) ---
-
-func TestHandleStartBuildErrors(t *testing.T) {
-	s := newTestServer(t)
-	cases := []struct {
-		name, body string
-		want       int
-	}{
-		{"bad json", `{`, http.StatusBadRequest},
-		{"no match", `{"compose":{"vertical":"robotics","platform":"ptl","os":"ubuntu24","imageType":"iso"}}`, http.StatusBadRequest},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			rr := httptest.NewRecorder()
-			s.handleStartBuild(rr, httptest.NewRequest(http.MethodPost, "/api/v1/builds", strings.NewReader(c.body)))
-			if rr.Code != c.want {
-				t.Errorf("status = %d, want %d", rr.Code, c.want)
-			}
-		})
-	}
-}
+// --- build log SSE handler ---
 
 func TestHandleBuildLogsMissingBuild(t *testing.T) {
 	s := newTestServer(t)
@@ -553,7 +460,7 @@ func TestHandleBuildLogsCompletedBuild(t *testing.T) {
 	s := newTestServer(t)
 	b := &build{ID: "done", done: make(chan struct{})}
 	b.appendLog("building...")
-	b.finish(statusSuccess, []artifact{{Name: "img", Type: "image", Path: "/o/img"}}, "")
+	b.finish(statusSuccess, []artifact{{Name: "img", Type: "image", URL: "https://jenkins/img"}}, "")
 	close(b.done) // build already finished
 	s.tracker.add(b)
 
@@ -571,56 +478,21 @@ func TestHandleBuildLogsCompletedBuild(t *testing.T) {
 	}
 }
 
-// --- ICT binary discovery ---
-
-func TestDiscoverICTBinary(t *testing.T) {
-	// Prefers ./build/image-composer-tool when present.
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if err := os.MkdirAll("build", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile("build/image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
-		t.Errorf("with build/ present, got %q, want ./build/image-composer-tool", got)
-	}
-
-	// Falls back to the repo-root binary when ./build/ has none.
-	dir2 := t.TempDir()
-	t.Chdir(dir2)
-	if err := os.WriteFile("image-composer-tool", []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := discoverICTBinary(); got != "./image-composer-tool" {
-		t.Errorf("with only root binary, got %q, want ./image-composer-tool", got)
-	}
-
-	// With neither present (and not on PATH), returns the conventional path.
-	dir3 := t.TempDir()
-	t.Chdir(dir3)
-	if got := discoverICTBinary(); got != "./build/image-composer-tool" {
-		// Note: if a real image-composer-tool is on the test host's PATH, this
-		// branch returns that instead — accept an absolute path too.
-		if !filepath.IsAbs(got) {
-			t.Errorf("with nothing present, got %q, want ./build/... or an abs PATH hit", got)
-		}
-	}
-}
-
-// --- build details / template / artifact-download handlers ---
+// --- build details / template handlers ---
 
 func TestHandleBuildDetails(t *testing.T) {
 	s := newTestServer(t)
 	b := &build{
-		ID:           "d1",
-		WorkDir:      "/tmp/work",
-		CacheDir:     "/tmp/cache",
-		Template:     "robotics.yml",
-		TemplatePath: "/tmp/robotics.yml",
-		Command:      "sudo -n ict build robotics.yml",
-		done:         make(chan struct{}),
+		ID:       "d1",
+		Template: "template.yml",
+		Command:  "POST /job/.../buildWithParameters",
+		Jenkins: &jenkinsMeta{
+			Worker:      "worker-04",
+			JobURL:      "https://jenkins/job/worker-04/",
+			BuildURL:    "https://jenkins/job/worker-04/42/",
+			BuildNumber: 42,
+		},
+		done: make(chan struct{}),
 	}
 	b.finish(statusSuccess, nil, "")
 	s.tracker.add(b)
@@ -636,8 +508,11 @@ func TestHandleBuildDetails(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Command != b.Command || out.WorkDir != b.WorkDir {
-		t.Errorf("details mismatch: %+v", out)
+	if out.Command != b.Command {
+		t.Errorf("details command mismatch: %+v", out)
+	}
+	if out.Jenkins == nil || out.Jenkins.Worker != "worker-04" || out.Jenkins.BuildNumber != 42 {
+		t.Errorf("details jenkins mismatch: %+v", out.Jenkins)
 	}
 
 	// missing build -> 404
@@ -652,16 +527,11 @@ func TestHandleBuildDetails(t *testing.T) {
 
 func TestHandleBuildTemplate(t *testing.T) {
 	s := newTestServer(t)
-	// Write a real template file so the handler can read it.
-	tmpFile := filepath.Join(t.TempDir(), "robotics.yml")
-	if err := os.WriteFile(tmpFile, []byte(minimalTemplate), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	b := &build{
-		ID:           "t1",
-		Template:     "robotics.yml",
-		TemplatePath: tmpFile,
-		done:         make(chan struct{}),
+		ID:               "t1",
+		Template:         "robotics.yml",
+		TemplatePathYAML: minimalTemplate,
+		done:             make(chan struct{}),
 	}
 	close(b.done)
 	s.tracker.add(b)
@@ -680,60 +550,23 @@ func TestHandleBuildTemplate(t *testing.T) {
 		t.Errorf("body missing template content: %q", rr.Body.String())
 	}
 
-	// missing build -> 404
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/template", nil)
-	req2.SetPathValue("id", "nope")
+	// build with no template recorded -> 404
+	b2 := &build{ID: "empty", done: make(chan struct{})}
+	close(b2.done)
+	s.tracker.add(b2)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/empty/template", nil)
+	req2.SetPathValue("id", "empty")
 	rr2 := httptest.NewRecorder()
 	s.handleBuildTemplate(rr2, req2)
 	if rr2.Code != http.StatusNotFound {
-		t.Errorf("missing build status = %d, want 404", rr2.Code)
-	}
-}
-
-func TestHandleBuildArtifactDownload(t *testing.T) {
-	s := newTestServer(t)
-	// Artifact must live inside WorkDir to pass the path validation guard.
-	workDir := t.TempDir()
-	artifactFile := filepath.Join(workDir, "image.iso")
-	if err := os.WriteFile(artifactFile, []byte("fake-iso-content"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	b := &build{
-		ID:      "a1",
-		WorkDir: workDir,
-		done:    make(chan struct{}),
-	}
-	b.finish(statusSuccess, []artifact{{Name: "image.iso", Type: "image", Path: artifactFile}}, "")
-	s.tracker.add(b)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/builds/a1/artifacts/image.iso", nil)
-	req.SetPathValue("id", "a1")
-	req.SetPathValue("name", "image.iso")
-	rr := httptest.NewRecorder()
-	s.handleBuildArtifactDownload(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
-	}
-	if rr.Body.String() != "fake-iso-content" {
-		t.Errorf("body = %q, want fake-iso-content", rr.Body.String())
-	}
-
-	// unknown artifact name -> 404
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/a1/artifacts/nope.iso", nil)
-	req2.SetPathValue("id", "a1")
-	req2.SetPathValue("name", "nope.iso")
-	rr2 := httptest.NewRecorder()
-	s.handleBuildArtifactDownload(rr2, req2)
-	if rr2.Code != http.StatusNotFound {
-		t.Errorf("unknown artifact status = %d, want 404", rr2.Code)
+		t.Errorf("empty template status = %d, want 404", rr2.Code)
 	}
 
 	// missing build -> 404
-	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/artifacts/image.iso", nil)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/builds/nope/template", nil)
 	req3.SetPathValue("id", "nope")
-	req3.SetPathValue("name", "image.iso")
 	rr3 := httptest.NewRecorder()
-	s.handleBuildArtifactDownload(rr3, req3)
+	s.handleBuildTemplate(rr3, req3)
 	if rr3.Code != http.StatusNotFound {
 		t.Errorf("missing build status = %d, want 404", rr3.Code)
 	}

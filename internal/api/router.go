@@ -20,18 +20,20 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/templates/compose", s.handleCompose)
 	mux.HandleFunc("GET /api/v1/packages", s.handleSearchPackages)
 
-	// Build path (implemented in builds.go)
-	mux.HandleFunc("POST /api/v1/builds", s.handleStartBuild)
+	// Build path — read-only routes shared with the Jenkins dispatcher.
+	// New builds are triggered exclusively via POST /api/v1/jenkins/dispatch
+	// below; each handler here looks up an existing entry in the in-memory
+	// build tracker by id and returns its logs / artifacts / details /
+	// template.
 	mux.HandleFunc("GET /api/v1/builds/{id}/logs", s.handleBuildLogs)
 	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts", s.handleBuildArtifacts)
 	mux.HandleFunc("GET /api/v1/builds/{id}/details", s.handleBuildDetails)
 	mux.HandleFunc("GET /api/v1/builds/{id}/template", s.handleBuildTemplate)
-	mux.HandleFunc("GET /api/v1/builds/{id}/artifacts/{name}", s.handleBuildArtifactDownload)
 
 	// Jenkins dispatch (implemented in jenkins.go). Kicks off a build on one
 	// of the worker-* jobs under the configured workers folder. All follow-on
 	// interactions (logs, details, artifacts) reuse the /api/v1/builds/{id}/*
-	// routes above because Jenkins-dispatched builds share the same tracker.
+	// routes above because dispatched builds share the same tracker.
 	mux.HandleFunc("POST /api/v1/jenkins/dispatch", s.handleJenkinsDispatch)
 
 	// Cancel a running Jenkins-dispatched build. POSTs Jenkins' graceful
