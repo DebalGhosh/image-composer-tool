@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
@@ -150,13 +152,105 @@ func saveParsedPackageCache(cacheFile, checksum string, pkgs []ospackage.Package
 	return os.WriteFile(cacheFile, data, 0600)
 }
 
+// refreshRepoMetadata re-downloads the repository metadata files (Release, its
+// signature, and the archive key where applicable) into pkgMetaDir.
+//
+// The download is staged in a sibling temporary directory and moved into place
+// only after every file has arrived, so an interrupted or failed refresh cannot
+// leave pkgMetaDir holding a partial Release — which would fail signature
+// verification and break an otherwise working offline build. Returns whether the
+// files were replaced; on error the existing files are untouched.
+func refreshRepoMetadata(pkgMetaDir string, localFiles, urls []string) (bool, error) {
+	stageDir, err := os.MkdirTemp(pkgMetaDir, ".meta-refresh-")
+	if err != nil {
+		return false, fmt.Errorf("creating metadata staging directory: %w", err)
+	}
+	defer func() {
+		if remErr := os.RemoveAll(stageDir); remErr != nil {
+			logger.Logger().Warnf("failed to remove metadata staging directory %s: %v", stageDir, remErr)
+		}
+	}()
+
+	if err := pkgfetcher.FetchPackages(runctx.Context(), urls, stageDir, 1); err != nil {
+		return false, err
+	}
+
+	// Require every expected file before committing: FetchPackages reports failures
+	// in aggregate, and a partial set must not overwrite a complete one.
+	for _, f := range localFiles {
+		staged := filepath.Join(stageDir, filepath.Base(f))
+		if fi, statErr := os.Stat(staged); statErr != nil || fi.Size() == 0 {
+			return false, fmt.Errorf("refreshed metadata is missing or empty: %s", filepath.Base(f))
+		}
+	}
+
+	for _, f := range localFiles {
+		staged := filepath.Join(stageDir, filepath.Base(f))
+		if err := os.Rename(staged, f); err != nil {
+			// Past the first successful rename this leaves a mixed set. Report it
+			// rather than pressing on: the caller treats a refresh error as
+			// "continue with what's on disk", and verification will catch a
+			// Release/signature pair that no longer agrees.
+			return false, fmt.Errorf("installing refreshed metadata %s: %w", filepath.Base(f), err)
+		}
+	}
+	return true, nil
+}
+
+// warnIfReleaseExpired logs when a Release file we could not refresh has passed
+// its Valid-Until. Debian sets that field precisely to bound how long a mirror
+// snapshot should be trusted, and past it the recorded package versions are
+// likely to have been superseded and deleted from the pool — the failure then
+// surfaces much later as a 404 on a single .deb, which reads like a broken
+// mirror rather than an expired local cache. Advisory only: a repository with no
+// Valid-Until is silently accepted, and this never fails the build.
+func warnIfReleaseExpired(releaseFile, baseURL string) {
+	f, err := os.Open(releaseFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Stop at the checksum blocks: they are the bulk of the file and cannot
+		// contain the field (indented continuation lines).
+		if strings.HasPrefix(line, " ") {
+			continue
+		}
+		value, ok := strings.CutPrefix(line, "Valid-Until:")
+		if !ok {
+			continue
+		}
+		until, perr := http.ParseTime(strings.TrimSpace(value))
+		if perr != nil {
+			return
+		}
+		if time.Now().After(until) {
+			logger.Logger().Warnf("cached metadata for %s expired on %s; package versions it "+
+				"names may no longer exist in the repository (a download failing with 404 is the "+
+				"usual symptom). Restore network access, or clear %s to force a refresh",
+				baseURL, until.UTC().Format(time.RFC1123), filepath.Dir(releaseFile))
+		}
+		return
+	}
+}
+
 // ParseRepositoryMetadata parses the Packages.gz file from gzHref.
-// Caching is applied at two levels:
-//  1. If a valid parse cache (packages.parsed.json) exists from a previous run it is
-//     returned immediately with zero network operations, enabling fully offline use.
-//  2. On the first (online) run the Packages.gz is only downloaded when its SHA256
-//     checksum in the freshly-fetched Release file differs from the local copy.
-//     Once parsed, the result is persisted to the cache for future offline runs.
+//
+// Caching is validated against the repository, not merely reused. The Release
+// file is small and is re-fetched on every online run; the SHA256 it records for
+// Packages.gz is the cache key for both the parse cache (packages.parsed.json)
+// and the downloaded Packages.gz itself. A cache entry is used only when its key
+// still matches the repository's current Release, so a mirror that has moved on
+// invalidates the cache instead of being ignored.
+//
+// Offline use is preserved by falling back, not by skipping validation: if the
+// Release re-fetch fails, the previously downloaded metadata is used as-is (and a
+// warning is logged if it has passed its Valid-Until). The refresh is staged in a
+// temporary directory and moved into place only once complete, so a failed
+// refresh cannot destroy the copies an offline build depends on.
 func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, releaseSign string, pbGPGKey string, buildPath string, arch string, packageFilter []string) ([]ospackage.PackageInfo, error) {
 	log := logger.Logger()
 
@@ -167,18 +261,23 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		return nil, fmt.Errorf("failed to create pkgMetaDir: %w", err)
 	}
 
-	// --- Parse cache check (offline-first) ---
-	// Check the cache before any network operation. If a valid cache exists from a
-	// previous run it is returned immediately, enabling fully offline operation.
+	// --- Parse cache load ---
+	// Loaded up front but deliberately NOT returned yet: it is only usable once
+	// its checksum has been checked against the repository's current Release
+	// (below). Returning it here — as this code previously did — pins a build to
+	// whatever package versions were current when the cache was first written.
+	// Debian's security pool deletes superseded files, so a stale index makes
+	// every subsequent build request a .deb that now 404s, with no way out short
+	// of deleting the cache directory by hand.
 	cacheFile := filepath.Join(pkgMetaDir, "packages.parsed.json")
 	allowParsedCache := !shouldBypassParsedPackageCache(baseURL) && !system.IsLiveInstallerExecution()
 	if !allowParsedCache {
 		log.Debugf("Bypassing parsed package metadata cache for %s", baseURL)
 	}
+	var cached *packageMetadataCache
 	if allowParsedCache {
-		if cached, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && cached.Checksum != "" {
-			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
-			return cached.Packages, nil
+		if c, loadErr := loadParsedPackageCache(cacheFile); loadErr == nil && c.Checksum != "" {
+			cached = c
 		}
 	}
 
@@ -213,36 +312,41 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 		metaURLList = []string{releaseFile, releaseSign}
 	}
 
-	// Only skip Release file refresh if local files exist; allow network check for freshness.
-	// This balances offline resilience with metadata staleness detection.
-	refreshNeeded := false
+	// Re-fetch the Release file every online run so the cache is validated rather
+	// than trusted. Release (plus its signature) is a few tens of KB against a
+	// Packages index measured in tens of MB, so this costs little and is what makes
+	// staleness detectable at all: the checksum it carries is the cache key used
+	// below for both the parse cache and Packages.gz.
+	//
+	// Staged into a temp dir and committed only on success, so a refresh that fails
+	// midway leaves the existing metadata intact for an offline build. A missing
+	// local file makes the refresh mandatory; otherwise a failure is a warning and
+	// the build proceeds against what it already has.
+	haveLocalMeta := true
 	for _, f := range metaLocalFiles {
 		if _, err := os.Stat(f); err != nil {
-			refreshNeeded = true
+			haveLocalMeta = false
 			break
 		}
 	}
 
-	// Download the metadata files only if missing
-	if refreshNeeded {
-		log.Infof("Refreshing metadata files for %s", baseURL)
-		for _, f := range metaLocalFiles {
-			if _, err := os.Stat(f); err == nil {
-				if remErr := os.Remove(f); remErr != nil {
-					return nil, fmt.Errorf("failed to remove old file %s: %w", f, remErr)
-				}
-			}
-		}
-		err := pkgfetcher.FetchPackages(runctx.Context(), metaURLList, pkgMetaDir, 1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", err)
-		}
-	} else {
-		log.Debugf("Using existing metadata files for %s (offline mode)", baseURL)
+	refreshed, refreshErr := refreshRepoMetadata(pkgMetaDir, metaLocalFiles, metaURLList)
+	switch {
+	case refreshErr != nil && !haveLocalMeta:
+		// Nothing cached to fall back to, so this is fatal — as it was before.
+		return nil, fmt.Errorf("failed to fetch critical repo config packages: %w", refreshErr)
+	case refreshErr != nil:
+		log.Warnf("Could not refresh metadata for %s (%v); continuing with previously "+
+			"downloaded metadata, which may name package versions the repository no "+
+			"longer serves", baseURL, refreshErr)
+		warnIfReleaseExpired(localReleaseFile, baseURL)
+	default:
+		log.Infof("Refreshed metadata files for %s", baseURL)
 	}
 
-	// Verify the release file if it was refreshed online; offline cached files are trusted.
-	if refreshNeeded {
+	// Verify the release file whenever it came off the network this run; metadata
+	// we could not refresh was verified when it was originally fetched.
+	if refreshed {
 		relVryResult, err := VerifyRelease(localReleaseFile, localReleaseSign, localPBGPGKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to verify release file: %w", err)
@@ -269,6 +373,20 @@ func ParseRepositoryMetadata(baseURL string, pkggz string, releaseFile string, r
 	expectedChecksum, err := findChecksumInRelease(localReleaseFile, "SHA256", pkgPathSrch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get checksum from Release file: %w", err)
+	}
+
+	// --- Parse cache check (validated) ---
+	// Now that the current Release has been read, the parse cache can be used —
+	// but only if it was built from the same Packages index. A mismatch means the
+	// repository has published a new index, so the cache is discarded and the
+	// metadata re-downloaded and re-parsed below.
+	if cached != nil {
+		if strings.EqualFold(cached.Checksum, expectedChecksum) {
+			log.Infof("Using cached package metadata for %s (checksum %s)", baseURL, cached.Checksum)
+			return cached.Packages, nil
+		}
+		log.Infof("Cached package metadata for %s is stale (cached checksum %s, repository now %s); re-parsing",
+			baseURL, cached.Checksum, expectedChecksum)
 	}
 
 	// --- Download cache check ---

@@ -713,3 +713,112 @@ func TestFetchPackages_CancelledContextExitsPromptly(t *testing.T) {
 		t.Fatalf("FetchPackages took %s to exit after cancel; expected <10s", elapsed)
 	}
 }
+
+// --- failure reporting ---
+
+// TestFetchPackages_ErrorNamesFailures covers the diagnosability gap behind a
+// real build failure: 858 packages were requested, exactly one 404'd (a stale
+// cached version the mirror had superseded), and the returned error said only
+// "one or more downloads failed" — leaving the actionable detail buried thousands
+// of progress-bar lines deep in the log. The error must name the package and the
+// reason.
+func TestFetchPackages_ErrorNamesFailures(t *testing.T) {
+	tempDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/good.deb" {
+			_, _ = w.Write([]byte("content"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	err := FetchPackages(context.Background(), []string{
+		server.URL + "/good.deb",
+		server.URL + "/ntfs-3g_2022.10.3-5+deb13u1_amd64.deb",
+	}, tempDir, 1)
+	if err == nil {
+		t.Fatal("expected an error when a package 404s")
+	}
+	// The count locates the failure against the whole set: 1 of 2 is a bad package,
+	// 2 of 2 would be a bad network.
+	if !strings.Contains(err.Error(), "1 of 2 package downloads failed") {
+		t.Errorf("error should count failures against the total, got: %v", err)
+	}
+	// The offending package must be named — this is the whole point.
+	if !strings.Contains(err.Error(), "ntfs-3g_2022.10.3-5") {
+		t.Errorf("error should name the failed package, got: %v", err)
+	}
+	// ...along with why it failed, so a 404 (stale metadata) is distinguishable
+	// from a connection error (bad proxy).
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should carry the underlying reason, got: %v", err)
+	}
+	// The package that succeeded must not be listed as a failure.
+	if strings.Contains(err.Error(), "good.deb") {
+		t.Errorf("error should not name the successful download, got: %v", err)
+	}
+}
+
+// A dead proxy fails every package. The error stays readable by truncating, but
+// must say how many it omitted — a silent cut would understate the scale and
+// suggest a single bad package rather than a broken network.
+func TestFetchPackages_ErrorTruncatesManyFailures(t *testing.T) {
+	tempDir := t.TempDir()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	total := maxReportedFailures + 3
+	urls := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		urls = append(urls, fmt.Sprintf("%s/pkg%d.deb", server.URL, i))
+	}
+
+	err := FetchPackages(context.Background(), urls, tempDir, 4)
+	if err == nil {
+		t.Fatal("expected an error when every package 404s")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, fmt.Sprintf("%d of %d package downloads failed", total, total)) {
+		t.Errorf("error should report every package as failed, got: %v", err)
+	}
+	if !strings.Contains(msg, "and 3 more") {
+		t.Errorf("error should report the omitted count, got: %v", err)
+	}
+	// Only maxReportedFailures items are listed.
+	if got := strings.Count(msg, "\n  - "); got != maxReportedFailures {
+		t.Errorf("listed %d failures, want %d", got, maxReportedFailures)
+	}
+}
+
+// A cancelled fetch must keep reporting cancellation rather than being reframed
+// as a pile of download failures: the two need different responses from the user.
+func TestFetchPackages_CancelNotReportedAsFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := FetchPackages(ctx, []string{"http://example.invalid/pkg.deb"}, tempDir, 1)
+	if err == nil {
+		t.Fatal("expected an error for a cancelled fetch")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("cancellation should be surfaced as such, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "package downloads failed") {
+		t.Errorf("cancellation must not be reported as download failures, got: %v", err)
+	}
+}
+
+// summarizeFailures is called on the error path only, but a downloadError set
+// without a recorded URL (the ctx-drain branch) must not produce a dangling
+// "failed:" with nothing after it.
+func TestSummarizeFailuresEmpty(t *testing.T) {
+	if got := summarizeFailures(nil); got != "" {
+		t.Errorf("summarizeFailures(nil) = %q, want empty", got)
+	}
+}

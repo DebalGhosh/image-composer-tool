@@ -419,7 +419,7 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 	// signal itself as soon as it can (setPgidCheckCancel reports it as pending),
 	// so don't treat that as a delivery failure here.
 	if pgid > 0 {
-		if err := s.signalCancel(pgid); err != nil {
+		if err := s.signalGroup(pgid); err != nil {
 			// The signal never reached the process group, so ICT may never start its
 			// teardown. Record a cancellation-failure with the underlying error so the
 			// UI can tell the user the kill itself failed (distinct from ICT running
@@ -428,7 +428,13 @@ func (s *Server) handleCancelBuild(w http.ResponseWriter, r *http.Request) {
 			detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
 			b.setResidual(residualCancellation, detail)
 			b.appendLog("ERROR " + detail)
-			logger.Logger().Errorf("build %s: %s", id, detail)
+			// Warn, not Error: the logger attaches a stack trace at Error level, and a
+			// stack trace here is actively misleading — a refused signal is an expected
+			// host-configuration outcome (missing/mismatched sudoers rule), not a bug in
+			// this code path. The condition is already reported to the user via the
+			// response body and the build's residual, so the log line only needs to say
+			// what happened.
+			logger.Logger().Warnf("build %s: %s", id, detail)
 			s.watchCancel(b) // still bound the cancelling state
 			writeJSON(w, http.StatusAccepted, cancelAccepted{
 				BuildID:  id,
@@ -479,7 +485,7 @@ func (s *Server) watchCancel(b *build) {
 
 		if pgid := b.currentPgid(); pgid > 0 {
 			b.appendLog(fmt.Sprintf("• still cancelling after %s — re-sending SIGTERM", cancelGracePeriod))
-			if err := s.signalCancel(pgid); err != nil {
+			if err := s.signalGroup(pgid); err != nil {
 				log.Warnf("build %s: re-signalling process group %d: %v", b.ID, pgid, err)
 			}
 		}
@@ -529,17 +535,115 @@ func (s *Server) signalCancel(pgid int) error {
 	if pgid <= 0 {
 		return fmt.Errorf("no process group recorded for build")
 	}
+	// Never signal our own process group. The build is spawned with Setpgid so it
+	// becomes its own group leader (pgid == child pid), but cmd.Start returns before
+	// the child-side setpgid necessarily completes; if a cancel is serviced in that
+	// window the recorded pgid can still be the server's own group. Signalling it
+	// with TERM would take down the server — and, when the server shares a session
+	// with the operator's shell (e.g. launched from an interactive SSH login rather
+	// than a dedicated service unit), the whole login session with it. Refuse, and
+	// report it so the caller records a cancellation-failure rather than self-terminating.
+	if self := syscall.Getpgrp(); pgid == self {
+		return fmt.Errorf("refusing to signal build process group %d: it matches the server's own group "+
+			"(the build had not yet moved into its own process group)", pgid)
+	}
 	if s.cfg.Sudo {
 		// `kill -TERM -<pgid>`: the leading `-` on the pid makes kill target the
 		// process group. -n never prompts; a missing sudoers rule fails fast.
 		out, err := exec.Command("sudo", "-n", "kill", "-TERM", fmt.Sprintf("-%d", pgid)).CombinedOutput()
 		if err != nil {
+			// Distinguish the one benign outcome — `kill` ran but the group was
+			// already gone — from every genuine delivery failure.
+			//
+			// The build's own group leader is the `sudo` wrapper, so signalling
+			// -pgid races that wrapper's exit: TERM reaches ICT, which begins its
+			// cleanup and exits, and by the time `kill` walks the group a member has
+			// already gone — so `kill` exits non-zero even though the signal *was*
+			// delivered. Depending on the `kill` implementation that shows up either
+			// as "no such process" (ESRCH) text on stderr or — as GNU coreutils
+			// `kill` does for a partially-gone process group — as a bare non-zero
+			// exit with no diagnostic at all. Reporting either as a cancellation-
+			// failure would raise a false "machine may need manual cleanup" alarm on
+			// a build that cancelled and tore down cleanly, so we swallow both.
+			//
+			// Everything else means the signal likely never reached the group and
+			// must surface as a cancellation-failure: no sudoers rule (sudo won't
+			// authorize non-interactively), sudo unable to execute kill ("command not
+			// found", "unable to execute"), an invalid-usage error, etc. We default
+			// to treating a non-zero exit as a real failure and make an exception only
+			// for the recognizable already-gone race — the safe direction, since a
+			// hidden delivery failure would otherwise masquerade as a clean cancel
+			// until the watchdog's deadline.
+			if isKillTargetGone(string(out)) {
+				return nil
+			}
 			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	}
-	// Direct group signal (dev/root): negative pid = process group.
-	return syscall.Kill(-pgid, syscall.SIGTERM)
+	// Direct group signal (dev/root): negative pid = process group. ESRCH means the
+	// group already exited between our recording the pgid and signalling it — the
+	// build is on its way down, not a delivery failure.
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// isKillTargetGone reports whether a failed `sudo -n kill` failed *only* because
+// the target process group had already exited by the time kill walked it — the
+// benign teardown race where the signal was nonetheless delivered. This is the
+// one non-zero `kill` outcome we treat as success.
+//
+// Two shapes count as the benign race:
+//
+//   - stderr carries the "no such process" (ESRCH) family — how POSIX-y `kill`
+//     implementations report an already-gone target; and
+//   - the command produced no diagnostic output at all. GNU coreutils `kill`
+//     exits 1 without printing anything when part of the target process group
+//     has already exited (observed on live cancels: the `sudo` group leader dies
+//     as ICT tears down, so `kill -TERM -<pgid>` walks a group whose members are
+//     already gone). This is the same delivered-then-gone race, just silent.
+//
+// Every genuine delivery failure carries a diagnostic: sudo refusing to
+// authorize prints "a password is required" / "a terminal is required" (no
+// NOPASSWD rule), sudo unable to run kill prints "command not found" / "unable to
+// execute", and kill misusage prints a usage error. So a non-empty message that
+// isn't the ESRCH family is surfaced as a cancellation-failure, while an empty
+// message is the silent already-gone race. Matching the benign cases rather than
+// enumerating every failure keeps us on the safe side: an unrecognized *message*
+// is reported, not silently swallowed.
+func isKillTargetGone(out string) bool {
+	if strings.TrimSpace(out) == "" {
+		// Non-zero exit with no diagnostic: the group was (partially) already gone
+		// when kill walked it. A real authorization/exec failure always says why.
+		return true
+	}
+	o := strings.ToLower(out)
+	return strings.Contains(o, "no such process") || // POSIX ESRCH text
+		strings.Contains(o, "(esrch)")
+}
+
+// LogCancelSupport reports, at startup, the exact command the server will use to
+// cancel a build under --sudo. Cancellation is the one privileged operation whose
+// sudoers rule cannot be verified until a user actually clicks Cancel — possibly
+// an hour into a build — so surfacing the resolved binary up front turns a
+// late-breaking "a password is required" into something an operator can check
+// against their sudoers drop-in immediately.
+//
+// The server invokes a bare `sudo -n kill`, so sudo resolves the binary against
+// its own secure_path at runtime. We therefore log the path resolveSudoHelper
+// finds on that same secure_path — the exact path `serve --print-sudoers`
+// names in the generated rule — so the logged command and the generated rule
+// always agree.
+func LogCancelSupport(sudo bool) {
+	if !sudo {
+		return
+	}
+	logger.Logger().Infof(
+		"cancellation will signal build process groups via: sudo -n kill -TERM -<pgid> "+
+			"(sudo resolves kill on its secure_path to %s; the sudoers rule must name that path)",
+		resolveSudoHelper("kill"))
 }
 
 // errBadBuildRequest marks resolution failures caused by client input (bad
@@ -643,17 +747,23 @@ func (s *Server) runBuild(b *build, name string, cmdArgs []string) {
 		return
 	}
 	// Record the process-group id now that the child is running. With Setpgid the
-	// child is its own group leader, so the group id equals its pid. A cancel
-	// signals -pgid to reach the whole tree.
-	//
+	// child is its own group leader, so the group id equals its pid — but read it
+	// back with Getpgid rather than assuming pid == pgid: if the child hasn't been
+	// placed in its new group yet (or setpgid failed), Getpgid returns the group it
+	// is actually in, so we never record — and later signal — a group that isn't the
+	// build's. Fall back to the pid only if the lookup fails.
+	childPgid := cmd.Process.Pid
+	if pg, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
+		childPgid = pg
+	}
 	// A cancel can arrive in the window between the build being tracked as running
 	// (in handleStartBuild) and this point, when pgid was still 0. beginCancel
 	// would have transitioned to cancelling but signalCancel(0) could not signal
 	// anything. setPgidCheckCancel records the pgid and, atomically under b.mu,
 	// reports whether such an early cancel is pending so we can deliver the signal
 	// now that we finally have a group to target.
-	if pgid, pending := b.setPgidCheckCancel(cmd.Process.Pid); pending {
-		if err := s.signalCancel(pgid); err != nil {
+	if pgid, pending := b.setPgidCheckCancel(childPgid); pending {
+		if err := s.signalGroup(pgid); err != nil {
 			detail := fmt.Sprintf("failed to signal build process group %d: %v", pgid, err)
 			b.setResidual(residualCancellation, detail)
 			b.appendLog("ERROR " + detail)
