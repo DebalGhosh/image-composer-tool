@@ -79,3 +79,71 @@ func TestPkgsvcProxy_ErrorFallback(t *testing.T) {
 		t.Errorf("body missing total:0, got %s", body)
 	}
 }
+
+// TestPkgsvcDetailsProxy_Path verifies that a caller hitting
+// /api/v1/packages/{os}/{arch}/{name} lands on the microservice at
+// /package/{os}/{arch}/{name}, with the caller's ambient query string
+// stripped so nothing accidental leaks upstream.
+func TestPkgsvcDetailsProxy_Path(t *testing.T) {
+	pkgsvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/package/ubuntu/amd64/gcc" {
+			t.Errorf("proxy path = %q, want /package/ubuntu/amd64/gcc", r.URL.Path)
+		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("query = %q, want empty (proxy must strip)", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"gcc","version":"13","homepage":"https://gcc.gnu.org/"}`))
+	}))
+	defer pkgsvc.Close()
+
+	s := &Server{cfg: Config{PkgsvcURL: pkgsvc.URL}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages/ubuntu/amd64/gcc?ignored=1", nil)
+	// Manually populate path values — httptest.NewRequest does NOT run
+	// the mux, so r.PathValue would be empty otherwise.
+	req.SetPathValue("os", "ubuntu")
+	req.SetPathValue("arch", "amd64")
+	req.SetPathValue("name", "gcc")
+	rr := httptest.NewRecorder()
+	s.handlePackageDetails(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body, _ := io.ReadAll(rr.Body)
+	if !strings.Contains(string(body), `"homepage":"https://gcc.gnu.org/"`) {
+		t.Errorf("body missing homepage: %s", body)
+	}
+}
+
+// TestPkgsvcDetailsProxy_NotConfigured: when PkgsvcURL is empty, the
+// details endpoint 404s cleanly rather than trying to serve from the
+// embed fallback (which has no equivalent single-record lookup).
+func TestPkgsvcDetailsProxy_NotConfigured(t *testing.T) {
+	s := &Server{cfg: Config{}} // no PkgsvcURL
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages/ubuntu/amd64/gcc", nil)
+	req.SetPathValue("os", "ubuntu")
+	req.SetPathValue("arch", "amd64")
+	req.SetPathValue("name", "gcc")
+	rr := httptest.NewRecorder()
+	s.handlePackageDetails(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when pkgsvc not configured", rr.Code)
+	}
+}
+
+// TestPkgsvcDetailsProxy_Unreachable: when PkgsvcURL points at a refused
+// port, the ErrorHandler surfaces 502 so the dialog's detail pane can
+// render its "detail unavailable" state instead of hanging.
+func TestPkgsvcDetailsProxy_Unreachable(t *testing.T) {
+	s := &Server{cfg: Config{PkgsvcURL: "http://127.0.0.1:1"}}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages/ubuntu/amd64/gcc", nil)
+	req.SetPathValue("os", "ubuntu")
+	req.SetPathValue("arch", "amd64")
+	req.SetPathValue("name", "gcc")
+	rr := httptest.NewRecorder()
+	s.handlePackageDetails(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 when pkgsvc unreachable", rr.Code)
+	}
+}

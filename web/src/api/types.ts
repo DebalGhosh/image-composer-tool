@@ -125,8 +125,18 @@ export interface PackageSearchRequest {
   arch?: string
   q?: string
   limit?: number
+  // 'legacy' (default) preserves the 9-field shape the inline combobox
+  // consumes; 'full' asks the microservice for its enriched
+  // PackageDetails shape (homepage, popcon, provides sub-object, etc.),
+  // which the expanded PackageSearchDialog reads directly without a
+  // second round-trip.
+  fields?: 'legacy' | 'full'
 }
 
+// PackageEntry is the byte-identical 9-field legacy shape the frontend
+// has consumed since day one. New callers requesting `fields=full` get
+// PackageDetails — which is a strict superset — so mixing the two in a
+// response array (as `PackageEntry | PackageDetails`) is safe.
 export interface PackageEntry {
   name: string
   version: string
@@ -139,8 +149,76 @@ export interface PackageEntry {
   provides?: string[]
 }
 
+// PackageDetails is the enriched shape ict-pkgsvc returns for
+// `fields=full` searches and for the single-record lookup at
+// GET /api/v1/packages/{os}/{arch}/{name}. Every field beyond the
+// PackageEntry set is optional because AppStream/popcon coverage is
+// partial upstream — a package with no popcon signal still renders
+// correctly, its popularity block is just absent.
+//
+// `provides` is intentionally re-typed here (not extending
+// PackageEntry.provides) because the enriched shape splits it into
+// kind-buckets rather than a flat string list.
+export interface PackageDetails {
+  // Identity (mirrors PackageEntry base).
+  name: string
+  version: string
+  description: string
+  arch: string
+  section: string
+  repository: string
+  os: string
+  type: string
+  // Enriched fields (all optional — pkgsvc only sets what upstream
+  // metadata carried).
+  release?: string
+  component?: string
+  summary?: string
+  homepage?: string
+  installedSize?: number
+  multiArch?: string
+  tags?: string[]
+  categories?: string[]
+  keywords?: string[]
+  tasks?: string[]
+  provides?: {
+    binary?: string[]
+    library?: string[]
+    mimetype?: string[]
+    dbus?: string[]
+    python?: string[]
+    font?: string[]
+    firmware?: string[]
+  }
+  screenshots?: string[]
+  depends?: string[]
+  recommends?: string[]
+  suggests?: string[]
+  popularity?: {
+    inst: number
+    vote: number
+    old?: number
+    recent: number
+  }
+  sourceUrl?: string
+  lastSeen?: string
+}
+
+// Response for a legacy-shape search — every element is a PackageEntry.
+// Historical callers (inline PackageSearchCombobox) rely on this narrow
+// type, so it stays the default.
 export interface PackageSearchResponse {
   query: string
   total: number
   packages: PackageEntry[]
+}
+
+// Response for `fields=full` — every element is a fully enriched
+// PackageDetails. The client provides an overloaded api.searchPackages
+// so `fields: 'full'` narrows to this shape without a cast at call
+// sites, while default calls keep returning PackageSearchResponse.
+export interface PackageSearchResponseFull {
+  query: string
+  total: number
+  packages: PackageDetails[]
 }

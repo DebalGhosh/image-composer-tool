@@ -339,6 +339,53 @@ func packagesFSStats() (int, error) {
 	return len(entries), nil
 }
 
+// handlePackageDetails reverse-proxies GET /api/v1/packages/{os}/{arch}/{name}
+// to the microservice's /package/{os}/{arch}/{name} single-record endpoint.
+// Falls through to a 404 when PkgsvcURL is empty — the embed-scan fallback
+// only carries the paged /packages surface, not per-record lookups.
+//
+// The frontend's PackageSearchDialog uses this to refresh the highlighted
+// row's full metadata (homepage / popcon / provides / long description)
+// without a full re-fetch of the page. On unreachable-pkgsvc the proxy
+// answers 502 via the ErrorHandler so the dialog's detail pane renders
+// its "detail unavailable" empty state instead of hanging.
+func (s *Server) handlePackageDetails(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.PkgsvcURL == "" {
+		writeError(w, http.StatusNotFound, "PKGSVC_DISABLED",
+			"single-record package lookup requires the ict-pkgsvc microservice; set PKGSVC_URL on the backend")
+		return
+	}
+	target, err := url.Parse(s.cfg.PkgsvcURL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PKGSVC_URL_INVALID",
+			"PKGSVC_URL is malformed: "+err.Error())
+		return
+	}
+	osParam := r.PathValue("os")
+	arch := r.PathValue("arch")
+	name := r.PathValue("name")
+	if osParam == "" || arch == "" || name == "" {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "os/arch/name required")
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = "/package/" + osParam + "/" + arch + "/" + name
+		// Path already carries everything; strip incoming query so any
+		// junk the caller sent doesn't reach pkgsvc.
+		req.URL.RawQuery = ""
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		logger.Logger().Warnf("pkgsvc details proxy error for %s: %v", r.URL.Path, perr)
+		writeError(w, http.StatusBadGateway, "PKGSVC_UNREACHABLE",
+			"could not reach ict-pkgsvc for package details: "+perr.Error())
+	}
+	proxy.ServeHTTP(w, r)
+}
+
 // proxyToPkgsvc reverse-proxies /api/v1/packages? … to the microservice's
 // /search?fields=legacy path. The pkgsvc's legacy projection matches this
 // endpoint's response shape byte-for-byte, so the frontend needs zero

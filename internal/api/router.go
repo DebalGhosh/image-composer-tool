@@ -19,6 +19,11 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/manifest", s.handleGetManifest)
 	mux.HandleFunc("POST /api/v1/templates/compose", s.handleCompose)
 	mux.HandleFunc("GET /api/v1/packages", s.handleSearchPackages)
+	// Single-record lookup — used by the expanded PackageSearchDialog's
+	// detail pane to refresh the highlighted row's full metadata. Falls
+	// through to a 404 when PkgsvcURL is empty (embed-scan fallback path
+	// has no equivalent single-record endpoint).
+	mux.HandleFunc("GET /api/v1/packages/{os}/{arch}/{name}", s.handlePackageDetails)
 
 	// Build path — read-only routes shared with the Jenkins dispatcher.
 	// New builds are triggered exclusively via POST /api/v1/jenkins/dispatch

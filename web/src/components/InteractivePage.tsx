@@ -53,6 +53,7 @@ import {
   type Partition,
 } from './SegmentedPartitionEditor'
 import { PackageSearchCombobox } from './PackageSearchCombobox'
+import { PackageSearchDialog } from './PackageSearchDialog'
 import { InteractiveYamlPreview } from './InteractiveYamlPreview'
 import { applyOverrides, parseYamlToDraft } from '../lib/draftFromYaml'
 
@@ -150,6 +151,37 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
 
   const [seedBusy, setSeedBusy] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Expanded package-search dialog visibility. Opened by the icon
+  // button on the Packages card OR by Cmd/Ctrl+K when this tab is the
+  // active view (checked via the wrapper div's `hidden` attribute at
+  // keystroke time so we don't trigger the shortcut from other tabs).
+  const [pkgDialogOpen, setPkgDialogOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  // Global Cmd/Ctrl+K trigger. Document-level so the shortcut works
+  // regardless of what has keyboard focus inside the Interactive tab.
+  // The guard reads the closest ancestor with a data-tab attribute (set
+  // on the shell div by App.tsx via `hidden`) — an element inside a
+  // hidden subtree isn't focusable, but keyboard events still route to
+  // document, so we need to check ourselves. Falls back to
+  // `rootRef.current.offsetParent === null` which is `null` when any
+  // ancestor has `display:none`, but `hidden=""` sets display:none via
+  // the HTML spec so this fires correctly.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== 'k') return
+      if (rootRef.current === null) return
+      // If our root's offsetParent is null the whole subtree is hidden
+      // via display:none — the browser routes keyboard events to the
+      // active document element, so we only claim the shortcut when
+      // our tab is on screen.
+      if (rootRef.current.offsetParent === null) return
+      e.preventDefault()
+      setPkgDialogOpen(true)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
   /* -------------------- Derived: completeness + live YAML -------------------- */
 
@@ -453,7 +485,7 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
     draft.imageName.length > 0 && !IMAGE_NAME_RE.test(draft.imageName)
 
   return (
-    <div className="interactive-page-shell">
+    <div className="interactive-page-shell" ref={rootRef}>
       {/*
        * Wrap the PanelGroup in a `relative` container so we can absolutely
        * position the collapse-preview chevron button over the resize
@@ -888,9 +920,45 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
                 os={draft.target.dist}
                 arch={draft.target.arch}
               />
-              <p className="mt-2 text-xs" style={{ color: 'var(--muted-color)' }}>
-                {draft.packages.length} package(s) selected
-              </p>
+              <div className="mt-2 flex items-center gap-3 text-xs" style={{ color: 'var(--muted-color)' }}>
+                <span>
+                  {draft.packages.length} package(s) selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPkgDialogOpen(true)}
+                  aria-label="Open expanded package search"
+                  className="cursor-pointer inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  style={{
+                    borderColor: 'var(--border-color)',
+                    color: 'var(--muted-color)',
+                    background: 'var(--input-background)',
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="1.6" />
+                    <path d="M14 14l3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                  Advanced search
+                  <kbd
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '0 4px',
+                      borderRadius: 3,
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--section-background)',
+                      color: 'var(--muted-color)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 10,
+                      lineHeight: 1.4,
+                      marginLeft: 2,
+                    }}
+                  >
+                    ⌘K
+                  </kbd>
+                </button>
+              </div>
             </Card>
 
             {/* 7. System */}
@@ -1095,6 +1163,20 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
           )}
         </div>
       </footer>
+
+      {/* Expanded package-search overlay. Opens via the "Advanced search"
+       * button on the Packages card OR the Cmd/Ctrl+K global shortcut when
+       * this tab is on screen. Shares the same values/onChange contract
+       * with the inline PackageSearchCombobox — anything the dialog adds
+       * shows up as a chip below the input the moment the dialog closes. */}
+      <PackageSearchDialog
+        open={pkgDialogOpen}
+        onClose={() => setPkgDialogOpen(false)}
+        values={draft.packages}
+        onChange={(next) => setDraft({ packages: next })}
+        os={draft.target.dist}
+        arch={draft.target.arch}
+      />
 
       <style>{`
         .interactive-page-shell {
