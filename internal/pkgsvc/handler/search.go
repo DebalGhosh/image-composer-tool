@@ -83,7 +83,7 @@ type searchResponse struct {
 //	X-Package-Index-Missing: true    when the index has zero docs
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	os := strings.ToLower(r.URL.Query().Get("os"))
+	os := normalizeOS(r.URL.Query().Get("os"))
 	arch := strings.ToLower(r.URL.Query().Get("arch"))
 	fields := strings.ToLower(r.URL.Query().Get("fields"))
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 50, 1, 100)
@@ -166,6 +166,37 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// normalizeOS folds the codename-based OS ids the frontend uses
+// ("ubuntu24", "debian13") into the family names the enriched
+// PackageRecord carries ("ubuntu", "debian"), while leaving family names
+// unchanged. Bleve's os facet is keyword-lowercased, so this is the one
+// place the two vocabularies meet.
+//
+// The mapping mirrors seed.splitOSRelease + the frontend's
+// draft.target.dist convention. Unknown ids strip trailing digits so a
+// future "fedora40" style call still lands on the "fedora" family.
+func normalizeOS(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	switch v {
+	case "ubuntu24", "ubuntu22":
+		return "ubuntu"
+	case "debian13", "debian12":
+		return "debian"
+	}
+	// Fallback: strip trailing digits so "fedora40" → "fedora" etc.
+	i := len(v)
+	for i > 0 && v[i-1] >= '0' && v[i-1] <= '9' {
+		i--
+	}
+	if i > 0 && i < len(v) {
+		return v[:i]
+	}
+	return v
+}
+
 // handleSuggest is the cheap typeahead path — only queries name.ngram +
 // keywords_ngram, no scoring on description.
 func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +208,7 @@ func (s *Server) handleSuggest(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 10, 1, 50)
 	hits, _, err := s.Idx.Search(index.SearchOpts{
 		Query: q,
-		OS:    strings.ToLower(r.URL.Query().Get("os")),
+		OS:    normalizeOS(r.URL.Query().Get("os")),
 		Arch:  strings.ToLower(r.URL.Query().Get("arch")),
 		Limit: limit,
 	})
