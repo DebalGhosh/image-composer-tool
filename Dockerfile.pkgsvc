@@ -1,0 +1,79 @@
+# syntax=docker/dockerfile:1.7
+# ICT web UI — package-search microservice container.
+#
+# Runs `ict-pkgsvc`, a Go binary that serves the fuzzy-searchable package
+# catalogue the Interactive tab's PackageSearchCombobox consumes. The main
+# backend reverse-proxies /api/v1/packages here so the frontend keeps
+# calling same-origin /api/v1/... (see Dockerfile.backend's PKGSVC_URL env
+# + docker-compose.yml).
+#
+# Two build stages:
+#   1. golang:1.25-bookworm — go build with vendor caches
+#   2. gcr.io/distroless/static-debian12 — thin, non-root runtime
+#
+# The runtime is distroless (unlike the backend which uses debian:12-slim)
+# because ict-pkgsvc:
+#   * doesn't shell out to anything (no ICT binary invocation, no sudo)
+#   * doesn't need ca-certificates until the crawler flag is flipped on
+#     (see PKGSVC_CRAWLER_ENABLED — v2 will need certs for HTTPS
+#     archive.ubuntu.com / archive.debian.org fetches, at which point we
+#     switch to distroless/base which bundles them)
+#   * runs an embedded healthcheck subcommand (`ict-pkgsvc healthcheck`)
+#     so we don't need a curl/wget binary in the runtime image
+#
+# Build:
+#   docker build -f Dockerfile.pkgsvc -t ict-pkgsvc .
+# Run (see docker-compose.yml for the recommended shape):
+#   docker run --rm -p 9090:9090 ict-pkgsvc
+
+########## Stage 1: build the Go binary ########################################
+
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /src
+
+# Prime the module cache in its own layer so subsequent source changes don't
+# re-download deps. --mount=type=cache keeps GOPATH/pkg warm across builds.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+# Static linking so the binary drops cleanly into distroless/static without
+# needing a matching glibc. CGO stays off — no cgo dependencies in this
+# codebase (bleve is pure Go).
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build \
+        -trimpath \
+        -ldflags="-s -w" \
+        -o /out/ict-pkgsvc \
+        ./cmd/ict-pkgsvc
+
+########## Stage 2: distroless runtime #########################################
+
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+
+# UID 65532 (`nonroot`) is baked in by the distroless image; matches the
+# volume-mount ownership expectations on most K8s clusters.
+COPY --from=build --chown=65532:65532 /out/ict-pkgsvc /usr/local/bin/ict-pkgsvc
+
+# Persistent state lives here; docker-compose mounts pkgsvc-data at this
+# path so a container restart doesn't re-crawl.
+VOLUME ["/var/lib/pkgsvc"]
+
+# Listen port — matches the default PKGSVC_LISTEN_ADDR (:9090). CaaS
+# platforms typically inspect EXPOSE to auto-wire ingress.
+EXPOSE 9090
+
+# The container runs its own healthcheck subcommand: no curl in the image,
+# no external probe process, no confusion about which port to hit — the
+# binary reads PKGSVC_LISTEN_ADDR itself. Distroless doesn't ship a shell,
+# so the exec-form CMD form is required (no `sh -c`).
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/ict-pkgsvc", "healthcheck"]
+
+# distroless/static:nonroot pre-sets USER 65532:65532; don't repeat it.
+ENTRYPOINT ["/usr/local/bin/ict-pkgsvc"]

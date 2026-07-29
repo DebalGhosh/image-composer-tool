@@ -1,0 +1,81 @@
+// SPDX-FileCopyrightText: (C) 2026 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+)
+
+// TestPkgsvcReverseProxy verifies that handleSearchPackages forwards to
+// PkgsvcURL/search when the config is set, rewrites the path, forces
+// fields=legacy, and preserves any custom headers the microservice sets.
+func TestPkgsvcReverseProxy(t *testing.T) {
+	// Fake pkgsvc that records the incoming path + query, echoes them
+	// back as the JSON body, and sets an X-Package-Index-Missing header
+	// so we can assert header round-trip.
+	pkgsvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			t.Errorf("proxy path = %q, want /search", r.URL.Path)
+		}
+		if r.URL.Query().Get("fields") != "legacy" {
+			t.Errorf("fields = %q, want legacy", r.URL.Query().Get("fields"))
+		}
+		if r.URL.Query().Get("q") != "gcc" {
+			t.Errorf("q = %q, want gcc", r.URL.Query().Get("q"))
+		}
+		if r.URL.Query().Get("os") != "ubuntu" {
+			t.Errorf("os = %q, want ubuntu", r.URL.Query().Get("os"))
+		}
+		w.Header().Set("X-Package-Index-Missing", "ubuntu-amd64;reason=demo")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"query":"gcc","total":1,"packages":[{"name":"gcc","version":"13"}]}`))
+	}))
+	defer pkgsvc.Close()
+
+	pkgsvcURL, _ := url.Parse(pkgsvc.URL)
+	s := &Server{cfg: Config{PkgsvcURL: pkgsvcURL.String()}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages?q=gcc&os=ubuntu&arch=amd64", nil)
+	rr := httptest.NewRecorder()
+	s.handleSearchPackages(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body, _ := io.ReadAll(rr.Body)
+	if !strings.Contains(string(body), `"name":"gcc"`) {
+		t.Errorf("body missing gcc: %s", body)
+	}
+	// Header must round-trip.
+	if got := rr.Header().Get("X-Package-Index-Missing"); got != "ubuntu-amd64;reason=demo" {
+		t.Errorf("X-Package-Index-Missing = %q, want round-tripped", got)
+	}
+}
+
+// TestPkgsvcProxy_ErrorFallback: when PKGSVC_URL points at an unreachable
+// host, the ErrorHandler should surface an empty response + the missing
+// header so the frontend still renders the fallback banner instead of a
+// 502 toast.
+func TestPkgsvcProxy_ErrorFallback(t *testing.T) {
+	s := &Server{cfg: Config{PkgsvcURL: "http://127.0.0.1:1"}} // guaranteed refused
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages?q=whatever&os=ubuntu&arch=amd64", nil)
+	rr := httptest.NewRecorder()
+	s.handleSearchPackages(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (fallback path)", rr.Code)
+	}
+	if got := rr.Header().Get("X-Package-Index-Missing"); !strings.Contains(got, "pkgsvc-unreachable") {
+		t.Errorf("expected pkgsvc-unreachable header, got %q", got)
+	}
+	body, _ := io.ReadAll(rr.Body)
+	if !strings.Contains(string(body), `"total":0`) {
+		t.Errorf("body missing total:0, got %s", body)
+	}
+}

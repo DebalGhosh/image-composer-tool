@@ -17,6 +17,42 @@
 # ------------------------------------------------------------------------------
 
 services:
+  pkgsvc:
+    build:
+      context: .
+      dockerfile: Dockerfile.pkgsvc
+    image: ict-pkgsvc:local
+    # Not published in prod — the backend reaches it over the ict-ui
+    # network. Uncomment for direct curl smoke tests during dev.
+    # ports:
+    #   - "9090:9090"
+    environment:
+      PKGSVC_LISTEN_ADDR:      ":9090"
+      PKGSVC_CACHE_DIR:        "/var/lib/pkgsvc/cache"
+      PKGSVC_INDEX_DIR:        "/var/lib/pkgsvc/index"
+      PKGSVC_REFRESH_INTERVAL: "6h"
+      PKGSVC_SOURCES:          "ubuntu:noble:amd64,debian:trixie:amd64"
+      PKGSVC_UBUNTU_MIRROR:    "http://archive.ubuntu.com/ubuntu"
+      PKGSVC_DEBIAN_MIRROR:    "http://deb.debian.org/debian"
+      # Crawler is OFF by default. Migration step 1 ships the seed
+      # corpus embedded via //go:embed and behaves byte-identically to
+      # the pre-microservice era. Flip to "true" for step 2 (live
+      # Ubuntu/Debian crawl).
+      PKGSVC_CRAWLER_ENABLED:  "${PKGSVC_CRAWLER_ENABLED:-false}"
+      PKGSVC_ADMIN_TOKEN:      ${PKGSVC_ADMIN_TOKEN:-}
+      # Corporate-proxy passthrough for when the crawler is on.
+      HTTP_PROXY:  ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY:    ${NO_PROXY:-}
+    volumes:
+      - pkgsvc-data:/var/lib/pkgsvc
+    networks:
+      - ict-ui
+    restart: unless-stopped
+    # Healthcheck baked into Dockerfile.pkgsvc (via the embedded
+    # `ict-pkgsvc healthcheck` subcommand); declaring it here would be
+    # redundant.
+
   backend:
     build:
       context: .
@@ -38,12 +74,20 @@ services:
       JENKINS_USER:         ${JENKINS_USER:-}
       JENKINS_TOKEN:        ${JENKINS_TOKEN:-}
       JENKINS_WORKERS_PATH: ${JENKINS_WORKERS_PATH:-ict-farm/workers}
+      # Reverse-proxy /api/v1/packages to the sidecar microservice. See
+      # internal/api/handlers_packages.go — when this is empty, the
+      # backend falls back to the embedded shard scan (migration
+      # safety net, removed in step 4).
+      PKGSVC_URL:           ${PKGSVC_URL:-http://pkgsvc:9090}
       # Proxy passthrough for Intel network. If unset in .env these
       # simply propagate empty and Go's http.Transport uses the direct
       # route — safe default.
       HTTP_PROXY:  ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY:    ${NO_PROXY:-}
+    depends_on:
+      pkgsvc:
+        condition: service_healthy
     networks:
       - ict-ui
     restart: unless-stopped
@@ -84,3 +128,11 @@ services:
 networks:
   ict-ui:
     driver: bridge
+
+volumes:
+  # Persists the pkgsvc microservice's Bleve mmap index + raw upstream
+  # cache across container restarts. Without this the crawler re-fetches
+  # every source on each `docker compose up`. Ephemeral in the
+  # migration-step-1 embed-only mode (seed corpus is rebuilt from
+  # //go:embed each start), but harmless there — the volume is small.
+  pkgsvc-data:

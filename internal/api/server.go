@@ -33,7 +33,16 @@ type Config struct {
 	// PackagesDir overrides the embedded package-search index. Empty uses the
 	// index bundled at build time via //go:embed. Set to a live directory
 	// (e.g. one just written by `cmd/ict-index`) to refresh without a rebuild.
+	// Ignored when PkgsvcURL is set — the ict-pkgsvc microservice owns the
+	// live index in that mode.
 	PackagesDir string
+
+	// PkgsvcURL, when set, retargets the /api/v1/packages endpoint from the
+	// in-process embed-scan handler to a reverse-proxy against the
+	// ict-pkgsvc microservice's /search endpoint. Empty falls back to the
+	// embedded shards (single-binary dev / migration safety net; removed
+	// entirely in migration step 4).
+	PkgsvcURL string
 }
 
 // Server holds the API's dependencies and shared state.

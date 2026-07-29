@@ -26,6 +26,8 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -206,11 +208,27 @@ func (pi *packageIndex) isKnown(os, arch string) bool {
 
 // handleSearchPackages serves GET /api/v1/packages?os=&arch=&q=&limit=.
 //
-// Server-side ranking is intentionally simple: an exact name match ranks
-// first, then case-insensitive name-prefix, then case-insensitive
-// name-substring, then case-insensitive description-substring, else drop.
-// The client (MiniSearch) does the fancy fuzzy scoring on the returned page.
+// When Config.PkgsvcURL is non-empty the request is reverse-proxied to the
+// ict-pkgsvc microservice's /search endpoint with fields=legacy (which
+// projects the enriched PackageRecord shape back to the same 9-field
+// LegacyRecord the frontend has always consumed). When empty, we fall
+// through to the embedded-shard scan — the migration-safety-net path that
+// keeps single-binary local dev working with no sidecar.
+//
+// Server-side ranking of the embed fallback is intentionally simple: exact
+// name match first, then case-insensitive name-prefix, then name-substring,
+// then description-substring. The client (MiniSearch) does the fuzzy
+// scoring on the returned page. The microservice does something much
+// richer server-side (see internal/pkgsvc/index/bleve.go).
 func (s *Server) handleSearchPackages(w http.ResponseWriter, r *http.Request) {
+	// Reverse-proxy path: preferred when PkgsvcURL is configured. Uses
+	// httputil.NewSingleHostReverseProxy so headers (including
+	// X-Package-Index-Missing) round-trip unchanged.
+	if s.cfg.PkgsvcURL != "" {
+		s.proxyToPkgsvc(w, r)
+		return
+	}
+
 	q := r.URL.Query().Get("q")
 	osParam := r.URL.Query().Get("os")
 	arch := r.URL.Query().Get("arch")
@@ -319,4 +337,52 @@ func packagesFSStats() (int, error) {
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+// proxyToPkgsvc reverse-proxies /api/v1/packages? … to the microservice's
+// /search?fields=legacy path. The pkgsvc's legacy projection matches this
+// endpoint's response shape byte-for-byte, so the frontend needs zero
+// changes.
+//
+// Errors (unreachable pkgsvc, bad gateway, dial timeout) surface as 502
+// through the httputil ErrorHandler. On any 502 the header
+// X-Package-Index-Missing is set so the UI's fallback banner still fires
+// (parity with the embed path's "index missing" case).
+func (s *Server) proxyToPkgsvc(w http.ResponseWriter, r *http.Request) {
+	target, err := url.Parse(s.cfg.PkgsvcURL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "PKGSVC_URL_INVALID",
+			"PKGSVC_URL is malformed: "+err.Error())
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	// Rewrite the path so /api/v1/packages?q=… → target://search?q=…&fields=legacy.
+	// httputil's default Director sets req.URL.Host + Scheme but keeps
+	// req.URL.Path verbatim; we override to point at /search.
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = "/search"
+		// Preserve the caller's query string but force fields=legacy so
+		// the on-wire shape stays byte-identical. Any explicit
+		// fields= in the caller's URL is honoured (lets the frontend
+		// opt into fields=full later without a route change).
+		q := req.URL.Query()
+		if q.Get("fields") == "" {
+			q.Set("fields", "legacy")
+		}
+		req.URL.RawQuery = q.Encode()
+		// Drop the Host header the caller may have set (nginx does).
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		logger.Logger().Warnf("pkgsvc proxy error for %s: %v", r.URL.Path, perr)
+		w.Header().Set("X-Package-Index-Missing", "pkgsvc-unreachable;reason=proxy-error")
+		writeJSON(w, http.StatusOK, packageSearchResponse{
+			Query:    r.URL.Query().Get("q"),
+			Total:    0,
+			Packages: []packageResult{},
+		})
+	}
+	proxy.ServeHTTP(w, r)
 }

@@ -32,6 +32,13 @@ var (
 	// time; setting this to a directory (e.g. output of `cmd/ict-index`)
 	// swaps the catalogue at startup without a rebuild.
 	servePackagesDir string
+
+	// PKGSVC_URL, when set, reverse-proxies /api/v1/packages to the
+	// ict-pkgsvc microservice's /search endpoint (with fields=legacy so
+	// the frontend contract stays byte-identical). Empty falls back to
+	// the embedded shards. Docker Compose wires this to
+	// http://pkgsvc:9090 automatically.
+	servePkgsvcURL string
 )
 
 // createServeCommand creates the `serve` subcommand that runs the web UI API.
@@ -71,7 +78,13 @@ dispatches image builds to a Jenkins worker farm with streaming build logs.`,
 	serveCmd.Flags().StringVar(&servePackagesDir, "packages-dir", "",
 		"Directory of package-search index shards (from `cmd/ict-index`). "+
 			"When empty, the shards embedded at build time under "+
-			"internal/api/data/packages/ are used.")
+			"internal/api/data/packages/ are used. Ignored when "+
+			"--pkgsvc-url is set.")
+
+	serveCmd.Flags().StringVar(&servePkgsvcURL, "pkgsvc-url", os.Getenv("PKGSVC_URL"),
+		"URL of the ict-pkgsvc microservice (e.g. http://pkgsvc:9090). When "+
+			"set, /api/v1/packages is reverse-proxied to /search on this "+
+			"host, and the embedded shard scan is bypassed. env: PKGSVC_URL")
 
 	return serveCmd
 }
@@ -94,6 +107,7 @@ func executeServe(cmd *cobra.Command, args []string) error {
 		JenkinsToken:       serveJenkinsToken,
 		JenkinsWorkersPath: serveJenkinsWorkers,
 		PackagesDir:        servePackagesDir,
+		PkgsvcURL:          servePkgsvcURL,
 	})
 	if err != nil {
 		return err
