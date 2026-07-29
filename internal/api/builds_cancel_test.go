@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // --- exit-code classification ---
@@ -60,6 +63,169 @@ func TestClassifyExit(t *testing.T) {
 	}
 	if got := classifyExit(sigErr, false); got != statusFailed {
 		t.Fatalf("no-cancel SIGTERM-killed child: got %q, want failed", got)
+	}
+}
+
+// --- signal-failure discrimination ---
+
+// signalCancel treats a failed `sudo -n kill` as delivered ONLY when the failure
+// is the benign teardown race — `kill` reporting the group already gone, either
+// via the ESRCH text or (GNU coreutils on a partially-gone group) a bare non-zero
+// exit with no output. Every other non-zero outcome carries a diagnostic (sudo
+// can't authorize, sudo can't execute kill, kill misusage) and must be reported
+// as a delivery failure, so a hidden failure can't masquerade as a clean cancel.
+func TestIsKillTargetGone(t *testing.T) {
+	// The benign already-gone race (the signal was delivered, then a group member
+	// exited before kill walked the group). Two shapes: the ESRCH text a POSIX-y
+	// kill prints, and — observed on live root cancels — a bare non-zero exit with
+	// no output, which is how GNU coreutils kill reports a partially-gone process
+	// group. Both must be swallowed, or a clean cancel is reported as a spurious
+	// cancellation-failure.
+	gone := []string{
+		"kill: (-12345): No such process",
+		"bash: kill: (-12345) - No such process",
+		"kill: sending signal to -12345 failed: No such process",
+		"",       // silent already-gone race: kill exited non-zero, said nothing
+		"  \n\t", // whitespace-only is still "no diagnostic"
+	}
+	for _, out := range gone {
+		if !isKillTargetGone(out) {
+			t.Errorf("isKillTargetGone(%q) = false, want true (benign teardown race)", out)
+		}
+	}
+	// Every genuine delivery failure carries a diagnostic saying why, so a
+	// non-empty message that isn't the ESRCH family must NOT be swallowed.
+	realFailure := []string{
+		"sudo: a password is required",
+		"sudo: a terminal is required to read the password",
+		"Sorry, user svc is not allowed to execute '/usr/bin/kill -TERM -123' as root",
+		"sudo: no askpass program specified",
+		"sudo: kill: command not found",
+		"sudo: unable to execute /usr/bin/kill: No such file or directory",
+		"kill: invalid option -- 'x'",
+	}
+	for _, out := range realFailure {
+		if isKillTargetGone(out) {
+			t.Errorf("isKillTargetGone(%q) = true, want false (real delivery failure)", out)
+		}
+	}
+}
+
+// signalCancel must never TERM the server's own process group. If a cancel is
+// serviced before the child has moved into its own group, the recorded pgid can
+// still be the server's — signalling it would kill the server (and, when it shares
+// a session with the operator's shell, the login session too). The guard turns that
+// into a reported error instead, which the caller records as a cancellation-failure.
+func TestSignalCancelRefusesOwnGroup(t *testing.T) {
+	s := newTestServer(t)
+	self := syscall.Getpgrp()
+	err := s.signalCancel(self)
+	if err == nil {
+		t.Fatal("signalCancel(own pgid) returned nil; it must refuse to signal the server's own group")
+	}
+	if !strings.Contains(err.Error(), "own group") {
+		t.Fatalf("error should explain the self-group refusal: %v", err)
+	}
+}
+
+// signalCancel with no recorded group (pgid 0, the pre-start window) is an error,
+// not a signal: there is nothing to target yet.
+func TestSignalCancelNoPgid(t *testing.T) {
+	s := newTestServer(t)
+	if err := s.signalCancel(0); err == nil {
+		t.Fatal("signalCancel(0) returned nil; want an error for an unrecorded group")
+	}
+}
+
+// On the direct (non-sudo) path, signalling a process group that has already
+// exited returns ESRCH, which signalCancel must swallow: the build is on its way
+// down, not a delivery failure. We use a pgid that maps to no live group.
+func TestSignalCancelDirectESRCHSwallowed(t *testing.T) {
+	s := newTestServer(t) // Sudo=false → direct syscall.Kill(-pgid)
+	// A high, almost-certainly-unused pgid that isn't the server's own group.
+	pgid := 1 << 30
+	if pgid == syscall.Getpgrp() {
+		t.Skip("chosen pgid collides with the test process group")
+	}
+	if err := s.signalCancel(pgid); err != nil {
+		t.Fatalf("signalCancel of a vanished group should swallow ESRCH, got: %v", err)
+	}
+}
+
+// End-to-end (in-process): a real child that traps SIGTERM, prints a line, and
+// exits 130 — exactly how ICT reacts to a cancel — must be classified as
+// cancelled with NO residual. This is the regression test for the false
+// cancellation-failure that surfaced on main: `kill` racing the group's teardown
+// exits non-zero, but the signal was delivered and the child cleaned up. Runs the
+// real runBuild + group-signal path with no detached server and no risk to the
+// caller's session (the child is its own group leader).
+func TestRunBuildCancelClassifiesCancelledNoResidual(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	s := newTestServer(t)          // Sudo=false → signalCancel uses syscall.Kill(-pgid)
+	s.signalGroup = s.signalCancel // exercise the real signal path, not a stub
+
+	// A fake "build": trap TERM, emit a cleanup line, exit 130 like ICT's handler.
+	script := filepath.Join(t.TempDir(), "fakebuild.sh")
+	body := "#!/usr/bin/env bash\n" +
+		"trap 'echo cleanup complete; exit 130' TERM\n" +
+		"echo build running\n" +
+		"for i in $(seq 1 100); do sleep 0.1; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &build{
+		ID:      "e2e",
+		RootDir: filepath.Join(s.buildsRoot(), "e2e"),
+		WorkDir: filepath.Join(s.buildsRoot(), "e2e", "work"),
+		status:  statusNotStarted,
+		done:    make(chan struct{}),
+	}
+	if err := os.MkdirAll(b.WorkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.tracker.add(b)
+	if ok, _ := s.tryAcquireBuildSlot(b.ID); !ok {
+		t.Fatal("could not claim the build slot")
+	}
+
+	go s.runBuild(b, "bash", []string{script})
+
+	// Wait until the child is running and its group is recorded.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if pg := b.currentPgid(); pg > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("build never recorded a process group")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Cancel through the real handler path.
+	transitioned, pgid := b.beginCancel()
+	if !transitioned {
+		t.Fatal("beginCancel did not transition")
+	}
+	if err := s.signalGroup(pgid); err != nil {
+		t.Fatalf("signalGroup: %v", err)
+	}
+
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("build did not finish after cancel")
+	}
+
+	snap := b.snapshot()
+	if snap.status != statusCancelled {
+		t.Fatalf("status = %q, want cancelled\nlogs:\n%s", snap.status, strings.Join(b.snapshotLogs(), "\n"))
+	}
+	if snap.residual != nil {
+		t.Fatalf("residual = %+v, want nil (cancel delivered and child cleaned up)", snap.residual)
 	}
 }
 
@@ -305,11 +471,44 @@ func TestHandleCancelBuildNotRunning(t *testing.T) {
 }
 
 func TestHandleCancelBuildRunningTransitions(t *testing.T) {
-	s := newTestServer(t) // Sudo=false → signalCancel uses syscall.Kill directly
-	// A build whose "process group" is our own harmless pgid: we don't want the
-	// cancel to actually kill the test process, so use a pgid that Kill will fail
-	// on cleanly (a very large, non-existent pid). The handler still transitions
-	// to cancelling and records a cancellation-failure when the signal fails.
+	s := newTestServer(t)
+	// The signal is delivered successfully; the handler should transition to
+	// cancelling and record no residual. The terminal state arrives later on
+	// runBuild's wait path.
+	delivered := false
+	s.signalGroup = func(pgid int) error { delivered = true; return nil }
+	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
+	s.tracker.add(b)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/builds/run/cancel", nil)
+	req.SetPathValue("id", "run")
+	rec := httptest.NewRecorder()
+	s.handleCancelBuild(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	if !delivered {
+		t.Fatal("signalGroup was not called")
+	}
+	snap := b.snapshot()
+	if snap.status != statusCancelling {
+		t.Fatalf("status after cancel = %q, want cancelling", snap.status)
+	}
+	// A delivered signal must not raise a residual: the build cancelled cleanly.
+	if snap.residual != nil {
+		t.Fatalf("residual = %+v, want nil on a delivered signal", snap.residual)
+	}
+}
+
+// A signal that genuinely fails to deliver (e.g. a missing `kill` sudoers rule, so
+// sudo can't authorize) must still be surfaced as a cancellation-failure: ICT may
+// never have started its teardown, and no terminal SSE event may arrive.
+func TestHandleCancelBuildSignalFailureRecordsResidual(t *testing.T) {
+	s := newTestServer(t)
+	s.signalGroup = func(pgid int) error {
+		return fmt.Errorf("exit status 1: sudo: a password is required")
+	}
 	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 
@@ -325,7 +524,6 @@ func TestHandleCancelBuildRunningTransitions(t *testing.T) {
 	if snap.status != statusCancelling {
 		t.Fatalf("status after cancel = %q, want cancelling", snap.status)
 	}
-	// The bogus pgid can't be signalled, so a cancellation-failure is recorded.
 	if snap.residual == nil || snap.residual.Kind != residualCancellation {
 		t.Fatalf("residual = %+v, want cancellation-failure", snap.residual)
 	}
@@ -369,6 +567,9 @@ func TestHandleCancelBuildOrphanedRecord(t *testing.T) {
 // the only prompt notification the UI gets.
 func TestHandleCancelBuildReportsResidualInResponse(t *testing.T) {
 	s := newTestServer(t)
+	s.signalGroup = func(pgid int) error {
+		return fmt.Errorf("exit status 1: sudo: a password is required")
+	}
 	b := &build{ID: "run", status: statusRunning, pgid: 2 << 30, done: make(chan struct{})}
 	s.tracker.add(b)
 

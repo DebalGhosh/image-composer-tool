@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
-import { isActiveStatus, type BuildStatus } from './api/types'
+import { isActiveStatus, type BuildStatus, type ComposeRequest } from './api/types'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
 import { BuildImagePage } from './components/BuildImagePage'
@@ -63,21 +63,44 @@ export default function App() {
     setBuildId(id)
     setBuildStatus('running')
     setView('builds')
+    // Clear any earlier retry failure: it described a start that never happened,
+    // and a fresh build has now started. Leaving it set made the Compose page
+    // show a "could not start" banner above a build that was visibly running.
+    setRetryError(null)
   }
 
   const onBuildStatusChange = (s: BuildStatus) => setBuildStatus(s)
 
-  // Retry the last selection as a fresh compose. The start can legitimately fail
-  // — most importantly with 409 while the previous build's teardown still holds
-  // the server's single-build slot — so the optimistic 'running' must be rolled
-  // back and the reason shown, or the nav indicator would spin forever on a build
-  // that never started.
-  const onRetry = useCallback(async () => {
+  // Retry a build as a fresh compose.
+  //
+  // `req` is the retried build's own recorded selection, read back from the
+  // server. Prefer it over the store: the store holds whatever the Basic tab
+  // currently has selected, which after a page refresh is empty (it isn't
+  // persisted) — the server then matches no template and rejects the start with
+  // "no template maps to the selected combination". It is also simply the wrong
+  // input when retrying an older history entry, which should rebuild *that*
+  // configuration rather than the one on screen.
+  //
+  // The start can legitimately fail — most importantly with 409 while the
+  // previous build's teardown still holds the server's single-build slot — so the
+  // optimistic 'running' must be rolled back and the reason shown, or the nav
+  // indicator would spin forever on a build that never started.
+  const onRetry = useCallback(async (req?: ComposeRequest) => {
+    const compose = req ?? selectionRef.current
+    // Neither source knows what to build. Say so instead of posting an empty
+    // selection and surfacing the server's "no template maps..." rejection,
+    // which describes a bad combination rather than a missing one.
+    if (!compose.vertical || !compose.platform || !compose.os || !compose.imageType) {
+      setRetryError(
+        'this compose has no recorded configuration to retry — choose one on the Basic tab and compose from there',
+      )
+      return
+    }
     setRetrying(true)
     setRetryError(null)
     setBuildStatus('running')
     try {
-      const accepted = await api.startBuild(selectionRef.current)
+      const accepted = await api.startBuild(compose)
       setBuildId(accepted.buildId)
     } catch (e) {
       setRetryError((e as Error).message)

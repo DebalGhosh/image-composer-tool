@@ -99,6 +99,44 @@ flowchart TD
 6. **Store in Cache**: Save verified package for future use
 7. **Generate Dependency Graph**: Update `chrootpkgs.dot` with dependency information
 
+### Repository Metadata Caching
+
+Separate from the downloaded packages, the tool caches each repository's **package
+index** (the `Packages` file listing every available package and version) under
+`tmp/builds/{repo}_{arch}_{component}/`, alongside a parsed form in
+`packages.parsed.json`. Parsing an index is expensive — tens of MB per component —
+so reusing it is what keeps repeat builds fast.
+
+This cache is **validated, not simply reused**. On every build with network access:
+
+1. The repository's `Release` file is re-downloaded. It is small (tens of KB), so
+   this costs little, and it is the only way to detect that the repository has
+   moved on.
+2. `Release` records the SHA256 of the current `Packages` index. That checksum is
+   the cache key.
+3. If the cached entry's key matches, it is used with no further downloads. If it
+   does not, the index is re-downloaded and re-parsed, and the cache is rewritten.
+
+**Why this matters.** Debian's security pool keeps only the current version of
+each package and *deletes* superseded files. An index cached before a security
+update names `.deb` files that no longer exist, so builds fail with a 404 on a
+single package — for example `ntfs-3g_2022.10.3-5+deb13u1_amd64.deb` after `u2`
+superseded it. Validating the cache against `Release` means such a build picks up
+the current version instead of failing. Note that `--no-cache` does **not** help
+here: it isolates the package and workspace directories, not this metadata cache.
+
+**Offline behaviour is preserved by falling back, not by skipping validation.** If
+the `Release` refresh fails, the previously downloaded metadata is used as-is and
+a warning is logged; if that metadata has passed its `Valid-Until` date, the
+warning says so, since versions it names are likely to have been superseded. The
+refresh is staged in a temporary directory and moved into place only once every
+file has arrived, so a failed or interrupted refresh cannot leave a partial
+`Release` behind and break a working offline build.
+
+Metadata caching is bypassed entirely for `localhost`/loopback repository URLs
+(a local mirror is assumed to be under active development) and during live-installer
+execution.
+
 ### Package Cache Organization
 
 The package cache is organized by provider to ensure each unique package is stored only once:
@@ -145,6 +183,11 @@ If all required packages are cached, you can build images without internet acces
 - Useful for air-gapped environments
 - Enables builds on systems with restricted network access
 - Reduces dependency on repository availability
+
+When offline, cached repository metadata is used as-is and a warning is logged
+(see [Repository Metadata Caching](#repository-metadata-caching)). Packages the
+cache names but that are not already downloaded cannot be fetched, and a
+long-offline cache may name versions the repository has since removed.
 
 **4. Consistent Build Performance**
 

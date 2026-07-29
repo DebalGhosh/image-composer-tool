@@ -131,6 +131,34 @@ func downloadWithRetry(ctx context.Context, client *http.Client, url, destPath s
 	return fmt.Errorf("download failed after %d attempts: %w", maxDownloadAttempts, lastErr)
 }
 
+// maxReportedFailures bounds the failure list in the returned error. A broken
+// proxy fails every package, and an error carrying hundreds of near-identical
+// lines is as unreadable as one carrying none; the remainder stays in the log,
+// where each failure was already logged individually.
+const maxReportedFailures = 5
+
+// summarizeFailures renders collected failures as indented lines appended to the
+// error message, truncating past maxReportedFailures and saying how many were
+// omitted (a silent cut would misrepresent the scale of the problem).
+func summarizeFailures(failed []string) string {
+	if len(failed) == 0 {
+		return "" // downloadError set without a recorded URL; nothing to add
+	}
+	shown := failed
+	if len(shown) > maxReportedFailures {
+		shown = shown[:maxReportedFailures]
+	}
+	var b strings.Builder
+	for _, f := range shown {
+		b.WriteString("\n  - ")
+		b.WriteString(f)
+	}
+	if omitted := len(failed) - len(shown); omitted > 0 {
+		fmt.Fprintf(&b, "\n  ... and %d more (see the log for every failure)", omitted)
+	}
+	return b.String()
+}
+
 // FetchPackages downloads the given URLs into destDir using a pool of workers.
 // It shows a single progress bar tracking files completed vs total. The ctx
 // is threaded through to every HTTP request and retry-backoff sleep so a
@@ -163,6 +191,23 @@ func FetchPackages(ctx context.Context, urls []string, destDir string, workers i
 		}),
 	)
 
+	// Collect the URLs that failed, not just the fact that something did. With a
+	// bare boolean the caller can only report "one or more downloads failed", which
+	// for a large image means the actionable detail (which package, and why) is
+	// buried thousands of progress-bar lines deep in the log. The distinction is
+	// worth naming: a 404 on a single package usually means stale cached metadata
+	// pointing at a version the mirror has since superseded, whereas a connection
+	// error across many packages means the network or proxy is wrong. Those need
+	// different fixes, so the error text has to say which one happened.
+	var (
+		failedMu sync.Mutex
+		failed   []string
+	)
+	recordFailure := func(url string, err error) {
+		failedMu.Lock()
+		defer failedMu.Unlock()
+		failed = append(failed, fmt.Sprintf("%s: %v", url, err))
+	}
 	// create a shared boolean flag to signal a download error
 	var downloadError atomic.Bool
 
@@ -217,6 +262,7 @@ func FetchPackages(ctx context.Context, urls []string, destDir string, workers i
 
 				if err != nil {
 					log.Errorf("downloading %s failed: %v", url, err)
+					recordFailure(url, err)
 					downloadError.Store(true)
 				}
 				// increment progress bar
@@ -241,7 +287,7 @@ func FetchPackages(ctx context.Context, urls []string, destDir string, workers i
 		return fmt.Errorf("package download cancelled: %w", err)
 	}
 	if downloadError.Load() {
-		return fmt.Errorf("one or more downloads failed")
+		return fmt.Errorf("%d of %d package downloads failed:%s", len(failed), total, summarizeFailures(failed))
 	}
 
 	if err := bar.Finish(); err != nil {
