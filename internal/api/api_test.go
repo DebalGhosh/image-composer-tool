@@ -74,6 +74,57 @@ func TestLoadManifestEmbedded(t *testing.T) {
 	}
 }
 
+func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
+	// The shipped manifest is expected to carry both available (has a template)
+	// and planned-but-unavailable (empty template) combinations, and every
+	// unavailable one must be unresolvable so the UI grays it out and it can
+	// never be composed/built.
+	m, err := loadManifest("")
+	if err != nil {
+		t.Fatalf("loadManifest embedded: %v", err)
+	}
+
+	var available, unavailable int
+	for _, c := range m.Combinations {
+		if c.Template == "" {
+			unavailable++
+			if got := m.findTemplate(c.Vertical, c.SKU, c.Platform, c.OS, c.ImageType); got != "" {
+				t.Errorf("unavailable combo %+v resolved to %q, want empty", c, got)
+			}
+			continue
+		}
+		available++
+		// A labelled SKU should back every combination that uses one, so the UI
+		// has a display name for the grayed/enabled option alike.
+	}
+
+	if available == 0 {
+		t.Error("expected at least one available combination in embedded manifest")
+	}
+	if unavailable == 0 {
+		t.Error("expected at least one unavailable (empty-template) combination in embedded manifest")
+	}
+
+	// Every combination's ids must have a matching display-label entry so the UI
+	// can render both enabled and grayed options with names.
+	skuIDs := map[string]bool{}
+	for _, o := range m.SKUs {
+		skuIDs[o.ID] = true
+	}
+	targetIDs := map[string]bool{}
+	for _, tt := range m.Targets {
+		targetIDs[tt.ID] = true
+	}
+	for _, c := range m.Combinations {
+		if c.SKU != "" && !skuIDs[c.SKU] {
+			t.Errorf("combination SKU %q has no label in skus", c.SKU)
+		}
+		if !targetIDs[c.OS] {
+			t.Errorf("combination OS %q has no label in targets", c.OS)
+		}
+	}
+}
+
 func TestLoadManifestFromFileAndError(t *testing.T) {
 	// From disk.
 	p := filepath.Join(t.TempDir(), "m.yaml")
@@ -121,6 +172,18 @@ func TestFindTemplateAmbiguousSKU(t *testing.T) {
 	// With the SKU specified it resolves unambiguously.
 	if got := m.findTemplate("v", "b", "p", "o", "raw"); got != "b.yml" {
 		t.Errorf("explicit-SKU match = %q, want b.yml", got)
+	}
+}
+
+func TestFindTemplateUnavailableCombination(t *testing.T) {
+	// A combination with an empty template is a planned-but-not-ready selection
+	// (grayed out in the UI). findTemplate must not resolve it, so it can never
+	// be composed or built.
+	m := &Manifest{Combinations: []Combination{
+		{Vertical: "fed-aero", SKU: "drone-image-bkc", Platform: "ptl", OS: "ubuntu26-server", ImageType: "raw", Template: ""},
+	}}
+	if got := m.findTemplate("fed-aero", "drone-image-bkc", "ptl", "ubuntu26-server", "raw"); got != "" {
+		t.Errorf("unavailable combo = %q, want empty", got)
 	}
 }
 
@@ -223,6 +286,21 @@ func TestHandleComposeTemplateMissingOnDisk(t *testing.T) {
 	s.handleCompose(rr, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestHandleComposeUnavailableCombination(t *testing.T) {
+	s := newTestServer(t)
+	// A planned-but-not-ready combination (empty template, grayed out in the UI)
+	// must be rejected rather than built.
+	s.manifest.Combinations = append(s.manifest.Combinations, Combination{
+		Vertical: "fed-aero", SKU: "drone-image-bkc", Platform: "ptl", OS: "ubuntu26-server", ImageType: "raw", Template: "",
+	})
+	rr := httptest.NewRecorder()
+	body := `{"vertical":"fed-aero","sku":"drone-image-bkc","platform":"ptl","os":"ubuntu26-server","imageType":"raw"}`
+	s.handleCompose(rr, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
 	}
 }
 
