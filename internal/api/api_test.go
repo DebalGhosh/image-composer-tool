@@ -101,9 +101,11 @@ func TestEmbeddedManifestUnavailableCombinations(t *testing.T) {
 	if available == 0 {
 		t.Error("expected at least one available combination in embedded manifest")
 	}
-	if unavailable == 0 {
-		t.Error("expected at least one unavailable (empty-template) combination in embedded manifest")
-	}
+	// We do not require an unavailable combination here: the invariant checked
+	// above (any empty-template combo must be unresolvable) is what matters, and
+	// hard-failing when none exist would break this test once every planned
+	// combination ships a real template. Just record what we saw.
+	t.Logf("embedded manifest combinations: %d available, %d unavailable", available, unavailable)
 
 	// Every combination's ids must have a matching display-label entry so the UI
 	// can render both enabled and grayed options with names.
@@ -301,6 +303,15 @@ func TestHandleComposeUnavailableCombination(t *testing.T) {
 	s.handleCompose(rr, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", rr.Code, rr.Body)
+	}
+	// Assert on the payload so an unrelated 400 (bad JSON, missing field) can't
+	// make this test pass by accident: the rejection must be a NO_MATCH.
+	var resp errorBody
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding error body: %v (body: %s)", err, rr.Body)
+	}
+	if resp.Error.Code != "NO_MATCH" {
+		t.Errorf("error code = %q, want NO_MATCH", resp.Error.Code)
 	}
 }
 

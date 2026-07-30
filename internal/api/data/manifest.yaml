@@ -56,7 +56,7 @@ combinations:
   # dropdown), add (1) a combination that references it with an empty template
   # and (2) a matching `platforms:` label entry (see the commented block below).
   # Uncomment both to see a grayed Platform option under Fed Aero → Edge Node
-  # Infrastructure Blue Print BKC. When the template is authored, drop the empty
+  # Infrastructure Blueprint BKC. When the template is authored, drop the empty
   # `template: ""` and point it at the real file to enable the platform.
   #
   # - vertical: fed-aero
@@ -80,7 +80,7 @@ skus:
   - id: robotics-jazzy-ubuntu24
     displayName: Autonomous Mobile Robots (AMR)
   - id: edge-node-infra-bkc
-    displayName: Edge Node Infrastructure Blue Print BKC
+    displayName: Edge Node Infrastructure Blueprint BKC
   - id: generic-handheld-blueprint
     displayName: Generic Handheld Blueprint
   - id: drone-image-bkc

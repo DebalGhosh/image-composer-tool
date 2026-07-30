@@ -118,7 +118,9 @@ function distinct(
     const id = c[field] as string
     if (!id) continue
     if (!availById.has(id)) order.push(id)
-    availById.set(id, (availById.get(id) ?? false) || !!c.template)
+    // Treat a whitespace-only template as unavailable too, so a formatting slip
+    // in the manifest cannot accidentally enable a planned combination.
+    availById.set(id, (availById.get(id) ?? false) || c.template.trim() !== '')
   }
   return order.map((id) => ({ id, available: availById.get(id) ?? false }))
 }
@@ -202,7 +204,7 @@ export function cascadingOptions(
   const matched =
     c.find(
       (x) =>
-        !!x.template &&
+        x.template.trim() !== '' &&
         x.vertical === selection.vertical &&
         (x.sku || '') === selection.sku &&
         x.platform === selection.platform &&

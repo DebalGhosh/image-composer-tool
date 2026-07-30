@@ -34,7 +34,7 @@ export function Select({
           {placeholder}
         </option>
         {options.map((o) => (
-          <option key={o.id} value={o.id} disabled={o.disabled} className={o.disabled ? 'text-slate-400' : undefined}>
+          <option key={o.id} value={o.id} disabled={o.disabled}>
             {o.label}
             {o.disabled ? ' (coming soon)' : ''}
           </option>
