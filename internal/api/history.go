@@ -27,6 +27,9 @@ type buildMeta struct {
 	Artifacts []artifact      `json:"artifacts,omitempty"`
 	ErrMsg    string          `json:"errMsg,omitempty"`
 	LogFile   string          `json:"logFile,omitempty"`
+	// Residual outlives the process on purpose: leftover mounts and loop devices
+	// survive a server restart, so the remediation hint must too.
+	Residual *residualIssue `json:"residual,omitempty"`
 }
 
 // metaPath returns the meta.json path for a build root directory.
@@ -52,6 +55,7 @@ func (b *build) writeMeta() error {
 		Artifacts: res.artifacts,
 		ErrMsg:    res.errMsg,
 		LogFile:   res.logFile,
+		Residual:  res.residual,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -69,6 +73,7 @@ func (b *build) writeMeta() error {
 func buildFromMeta(rootDir string, m buildMeta) *build {
 	done := make(chan struct{})
 	close(done)
+	status, errMsg := reconcileInterrupted(buildStatus(m.Status), m.ErrMsg)
 	b := &build{
 		ID:        m.ID,
 		RootDir:   rootDir,
@@ -80,11 +85,41 @@ func buildFromMeta(rootDir string, m buildMeta) *build {
 		CreatedAt: m.CreatedAt,
 		LogFile:   m.LogFile,
 		done:      done,
-		status:    buildStatus(m.Status),
+		status:    status,
 		artifacts: m.Artifacts,
-		errMsg:    m.ErrMsg,
+		errMsg:    errMsg,
+		residual:  m.Residual,
 	}
 	return b
+}
+
+// reconcileInterrupted maps a persisted non-terminal status to a terminal one.
+//
+// A build is only ever reconstructed from meta.json when it has no live record in
+// the tracker, which means the process behind it is gone: the wait goroutine that
+// would have written a terminal status died with the previous server. Replaying
+// not-started/running/cancelling verbatim makes a dead build look live — the UI
+// adopts it as the in-flight compose, disables Compose, and offers a Cancel that
+// can only fail (there is no process group to signal). Reporting it as failed
+// instead is both accurate (the build did not produce an image) and actionable.
+//
+// The distinction matters for the work dir: an interrupted build may have left
+// mounts or loop devices behind, because nothing ran its teardown. That is a
+// cleanup-failure in spirit, but we deliberately do not synthesise a residual —
+// we have no evidence either way, and inventing one would undermine the residual
+// signal where it is real. The message points at the host instead.
+func reconcileInterrupted(status buildStatus, errMsg string) (buildStatus, string) {
+	switch status {
+	case statusNotStarted, statusRunning, statusCancelling:
+		const detail = "build was interrupted by a server restart; its process did not " +
+			"report an outcome, so any mounts or loop devices it held may still be present"
+		if errMsg != "" {
+			return statusFailed, errMsg + " (" + detail + ")"
+		}
+		return statusFailed, detail
+	default:
+		return status, errMsg
+	}
 }
 
 // buildsRoot is the directory holding one subdirectory per build.
@@ -144,9 +179,14 @@ func (s *Server) handleListBuilds(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(data, &m); err != nil || m.ID == "" {
 			continue
 		}
+		// A disk record still marked non-terminal belongs to a build the previous
+		// server was running; report it as interrupted rather than live. Live builds
+		// are overlaid below, so a genuinely running build is not affected by this.
+		// Without it the UI adopts a dead record as the in-flight compose.
+		status, _ := reconcileInterrupted(buildStatus(m.Status), m.ErrMsg)
 		seen[m.ID] = historyItem{
 			ID:        m.ID,
-			Status:    m.Status,
+			Status:    string(status),
 			Template:  m.Template,
 			CreatedAt: m.CreatedAt,
 			Summary:   m.Summary,

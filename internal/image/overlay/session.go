@@ -11,6 +11,7 @@ import (
 
 	"github.com/open-edge-platform/image-composer-tool/internal/config"
 	"github.com/open-edge-platform/image-composer-tool/internal/config/manifest"
+	"github.com/open-edge-platform/image-composer-tool/internal/image/imageconvert"
 	"github.com/open-edge-platform/image-composer-tool/internal/image/imageinspect"
 	"github.com/open-edge-platform/image-composer-tool/internal/ospackage"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/display"
@@ -41,8 +42,10 @@ type StageTiming struct {
 //
 // Builder never mutates the user-provided baseline source (Ingestor copies it
 // first), it is strictly additive (only ResolutionPlan.ToInstall is installed), and
-// it never modifies the installed bootloader binary or the ESP (mounted read-only);
-// boot regeneration is currently restricted to the initramfs.
+// it never modifies the installed bootloader binary or the ESP (mounted read-only).
+// Boot regeneration refreshes the initramfs and, on a GRUB2 baseline, the GRUB
+// config (applying overlayPolicy.kernelCmdline and overlayPolicy.grubDefault) —
+// both live on the writable root, never the ESP; grub-install is never run.
 type Builder struct {
 	template  *config.ImageTemplate
 	ingestor  *Ingestor
@@ -109,11 +112,16 @@ var (
 	builderResolveFn   = ResolveOverlayPackages
 	builderPreflightFn = Preflight
 	builderInstallFn   = InstallOverlayPackages
+	builderConfigureFn = RunOverlayConfigurations
 	builderRegenBootFn = RegenerateBoot
+	builderGrubRegenFn = RegenerateGrub
 	builderResizeFn    = ResizeBaseline
 	builderSBOMFn      = generateOverlaySBOM
 	builderEmitFn      = emitOverlayArtifact
 	builderInspectFn   = inspectOverlayArtifact
+	builderConvertFn   = func(path string, template *config.ImageTemplate) error {
+		return imageconvert.NewImageConvert().ConvertImageFile(path, template)
+	}
 )
 
 // NewBuilder constructs an overlay Builder for an overlay-mode template. It returns
@@ -214,8 +222,10 @@ func (b *Builder) Preprocess() (err error) {
 
 // Build runs the overlay build phase against the already-mounted baseline: it
 // performs an optional grow-only resize (first, so the added packages have room),
-// installs the approved package plan, then regenerates the initramfs for any added
-// packages (never the bootloader).
+// installs the approved package plan, runs the template's configuration commands,
+// regenerates the initramfs for any added packages, and finally — on a GRUB2
+// baseline — applies overlayPolicy.kernelCmdline and overlayPolicy.grubDefault and
+// regenerates the GRUB config (never the bootloader binary or the read-only ESP).
 //
 // It requires Preprocess to have succeeded; the mount lifecycle opened there is
 // reused here and is not torn down until Postprocess.
@@ -254,9 +264,39 @@ func (b *Builder) Build() error {
 		return err
 	}
 
+	// Run the template's arbitrary configuration commands AFTER the resolved package
+	// install but BEFORE boot regeneration. This mirrors create mode's ordering
+	// (addImageConfigs runs after installImagePkgs) and is deliberate: a
+	// configuration command may itself install content that affects the initramfs
+	// (e.g. an out-of-repo driver installed via wget+dpkg), so any resulting kernel
+	// module or hook must be picked up by the subsequent Boot Regeneration.
+	if err := b.timeStage("Configurations", func() error {
+		if cerr := builderConfigureFn(b.template, b.layout.RootMount); cerr != nil {
+			return fmt.Errorf("overlay build: configuration commands failed: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	if err := b.timeStage("Boot Regeneration", func() error {
 		if berr := builderRegenBootFn(b.info, b.layout.RootMount, installed, b.plan); berr != nil {
 			return fmt.Errorf("overlay build: boot regeneration failed: %w", berr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Regenerate the GRUB2 config AFTER the initramfs: grub-mkconfig enumerates the
+	// initrd images, so a newly added kernel's initramfs must already exist. This
+	// stage also applies overlayPolicy.kernelCmdline (a full-line GRUB_CMDLINE_LINUX
+	// replace) and overlayPolicy.grubDefault (a full-line GRUB_DEFAULT replace, to pin
+	// the default boot entry) before regenerating. It never touches the bootloader
+	// binary or the read-only ESP; the regenerated grub.cfg lives on the writable root.
+	if err := b.timeStage("GRUB Regeneration", func() error {
+		if gerr := builderGrubRegenFn(b.template, b.info, b.layout.RootMount); gerr != nil {
+			return fmt.Errorf("overlay build: GRUB regeneration failed: %w", gerr)
 		}
 		return nil
 	}); err != nil {
@@ -379,6 +419,22 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 		log.Infof("Overlay postprocess: image inspection disabled (--no-inspect); skipping")
 	}
 
+	// Convert the emitted RAW into the disk.artifacts output formats (qcow2, vhd,
+	// vhdx, vmdk, vdi) and apply any configured compression, so overlay mode emits
+	// every output format create/build mode supports. This reuses the same
+	// converter the create-mode rawmaker runs, keyed on template disk.artifacts;
+	// it is a no-op when disk.artifacts is empty or lists only raw, so plain RAW
+	// overlay builds are unchanged. It runs AFTER the RAW inspection above because
+	// a request that omits raw deletes the RAW file as part of conversion.
+	if err := b.timeStage("Convert Artifacts", func() error {
+		if cerr := builderConvertFn(artifact, b.template); cerr != nil {
+			return fmt.Errorf("overlay postprocess: failed to convert image artifact: %w", cerr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	// Display package statistics showing what was added/upgraded vs unchanged
 	stats := ComputePackageStats(b.baseline, b.plan)
 	PrintPackageStats(stats)
@@ -390,13 +446,38 @@ func (b *Builder) Postprocess(buildErr error) (err error) {
 
 	// Print the same success/artifact summary box the create-mode makers emit, so
 	// overlay builds also report the generated artifacts. The build directory is the
-	// parent of the emitted RAW artifact; emitOverlayArtifact has placed the .raw
-	// there, and the SBOM sidecar too when its best-effort copy succeeded (the
-	// summary lists whatever files are actually present, so a missing sidecar simply
-	// isn't shown).
-	display.PrintImageDirectorySummary(filepath.Dir(artifact), "RAW")
+	// parent of the emitted artifact; emitOverlayArtifact has placed the .raw there
+	// (and the conversion above may have added qcow2/vhd/... alongside or in place of
+	// it), plus the SBOM sidecar when its best-effort copy succeeded. The summary
+	// lists whatever files are actually present, so it reflects the converted formats
+	// and a missing sidecar simply isn't shown.
+	display.PrintImageDirectorySummary(filepath.Dir(artifact), overlayArtifactTypeLabel(b.template))
 
 	return nil
+}
+
+// overlayArtifactTypeLabel derives the "Image Type" label for the success
+// summary from the template's disk.artifacts, so the box reflects the formats
+// actually requested (e.g. "QCOW2" or "QCOW2, RAW") rather than always claiming
+// "RAW" after the Convert Artifacts stage may have replaced the .raw file. It
+// defaults to "RAW" when no artifacts are declared, matching the plain overlay
+// build that emits only the RAW image.
+func overlayArtifactTypeLabel(t *config.ImageTemplate) string {
+	artifacts := t.GetDiskConfig().Artifacts
+	if len(artifacts) == 0 {
+		return "RAW"
+	}
+	types := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.Type == "" {
+			continue
+		}
+		types = append(types, strings.ToUpper(a.Type))
+	}
+	if len(types) == 0 {
+		return "RAW"
+	}
+	return strings.Join(types, ", ")
 }
 
 // cleanup runs the mount/loop teardown chain. It is idempotent: the mount teardown

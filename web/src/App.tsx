@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
+import { isActiveStatus, type BuildStatus, type ComposeRequest } from './api/types'
 import { useStore } from './store'
 import { BasicPage } from './components/BasicPage'
 import { BuildImagePage } from './components/BuildImagePage'
 
 type LoadState = 'loading' | 'ready' | 'error'
 type View = 'basic' | 'advanced' | 'builds'
-type BuildStatus = 'idle' | 'running' | 'success' | 'failed'
 
 export default function App() {
   const setManifest = useStore((s) => s.setManifest)
@@ -16,6 +16,7 @@ export default function App() {
   const [view, setView] = useState<View>('basic')
   const [buildId, setBuildId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [retryError, setRetryError] = useState<string | null>(null)
   const [buildStatus, setBuildStatus] = useState<BuildStatus>('idle')
 
   const selection = useStore((s) => s.selection)
@@ -39,18 +40,20 @@ export default function App() {
 
   useEffect(load, [load])
 
-  // On load, adopt any already-running build from the server so the UI reflects
-  // it after a refresh: disables the Compose button and shows the nav indicator
+  // On load, adopt any in-flight build from the server so the UI reflects it
+  // after a refresh: disables the Compose button and shows the nav indicator
   // (otherwise buildStatus resets to 'idle' and a duplicate build could start).
+  // A build mid-cancel still holds the server's single-build slot, so adopt those
+  // too — otherwise Compose looks available and the start would 409.
   useEffect(() => {
     if (state !== 'ready') return
     api
       .listBuilds()
       .then((builds) => {
-        const running = builds.find((b) => b.status === 'running')
-        if (running) {
-          setBuildId(running.id)
-          setBuildStatus('running')
+        const active = builds.find((b) => isActiveStatus(b.status))
+        if (active) {
+          setBuildId(active.id)
+          setBuildStatus(active.status as BuildStatus)
         }
       })
       .catch(() => {})
@@ -60,16 +63,48 @@ export default function App() {
     setBuildId(id)
     setBuildStatus('running')
     setView('builds')
+    // Clear any earlier retry failure: it described a start that never happened,
+    // and a fresh build has now started. Leaving it set made the Compose page
+    // show a "could not start" banner above a build that was visibly running.
+    setRetryError(null)
   }
 
   const onBuildStatusChange = (s: BuildStatus) => setBuildStatus(s)
 
-  const onRetry = useCallback(async () => {
+  // Retry a build as a fresh compose.
+  //
+  // `req` is the retried build's own recorded selection, read back from the
+  // server. Prefer it over the store: the store holds whatever the Basic tab
+  // currently has selected, which after a page refresh is empty (it isn't
+  // persisted) — the server then matches no template and rejects the start with
+  // "no template maps to the selected combination". It is also simply the wrong
+  // input when retrying an older history entry, which should rebuild *that*
+  // configuration rather than the one on screen.
+  //
+  // The start can legitimately fail — most importantly with 409 while the
+  // previous build's teardown still holds the server's single-build slot — so the
+  // optimistic 'running' must be rolled back and the reason shown, or the nav
+  // indicator would spin forever on a build that never started.
+  const onRetry = useCallback(async (req?: ComposeRequest) => {
+    const compose = req ?? selectionRef.current
+    // Neither source knows what to build. Say so instead of posting an empty
+    // selection and surfacing the server's "no template maps..." rejection,
+    // which describes a bad combination rather than a missing one.
+    if (!compose.vertical || !compose.platform || !compose.os || !compose.imageType) {
+      setRetryError(
+        'this compose has no recorded configuration to retry — choose one on the Basic tab and compose from there',
+      )
+      return
+    }
     setRetrying(true)
+    setRetryError(null)
     setBuildStatus('running')
     try {
-      const accepted = await api.startBuild(selectionRef.current)
+      const accepted = await api.startBuild(compose)
       setBuildId(accepted.buildId)
+    } catch (e) {
+      setRetryError((e as Error).message)
+      setBuildStatus('failed')
     } finally {
       setRetrying(false)
     }
@@ -134,7 +169,7 @@ export default function App() {
           <div hidden={view !== 'basic'}>
             <BasicPage
               onBuildStarted={onBuildStarted}
-              buildInProgress={buildStatus === 'running'}
+              buildInProgress={isActiveStatus(buildStatus)}
             />
           </div>
           <div hidden={view !== 'builds'}>
@@ -142,6 +177,7 @@ export default function App() {
               buildId={buildId}
               onRetry={onRetry}
               retrying={retrying}
+              retryError={retryError}
               onStatusChange={onBuildStatusChange}
             />
           </div>
@@ -151,13 +187,23 @@ export default function App() {
   )
 }
 
+// One entry per non-idle build state. Typed as an exhaustive Record so adding a
+// state to BuildStatus is a compile error here rather than a blank indicator.
+const indicatorStyles: Record<
+  Exclude<BuildStatus, 'idle'>,
+  { color: string; pulse: boolean; label: string }
+> = {
+  'not-started': { color: 'bg-yellow-400', pulse: true, label: 'Compose starting' },
+  running: { color: 'bg-yellow-400', pulse: true, label: 'Compose in progress' },
+  cancelling: { color: 'bg-amber-500', pulse: true, label: 'Cancelling compose' },
+  cancelled: { color: 'bg-slate-400', pulse: false, label: 'Compose cancelled' },
+  success: { color: 'bg-green-400', pulse: false, label: 'Compose completed' },
+  failed: { color: 'bg-red-500', pulse: false, label: 'Compose failed' },
+}
+
 function BuildIndicator({ status, onClick }: { status: BuildStatus; onClick: () => void }) {
   if (status === 'idle') return null
-  const cfg = {
-    running: { color: 'bg-yellow-400', pulse: true,  label: 'Compose in progress' },
-    success: { color: 'bg-green-400',  pulse: false, label: 'Compose completed' },
-    failed:  { color: 'bg-red-500',    pulse: false, label: 'Compose failed' },
-  }[status]
+  const cfg = indicatorStyles[status]
   return (
     <button
       onClick={onClick}
