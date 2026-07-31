@@ -107,6 +107,31 @@ For path-scoped detail, see `.github/instructions/`:
 
 ---
 
+## Hard-won context (read before touching the web UI or the farm)
+
+- [`.claude/YAML-INTEGRITY.md`](.claude/YAML-INTEGRITY.md) — **mandatory** before
+  editing `web/src/lib/draftFromYaml.ts`, `web/src/store.ts`,
+  `internal/api/jenkins.go`, or the template schema. A UI defect handed the
+  Jenkins farm silently-corrupted `TEMPLATE_YAML`: one build failed after
+  installing all 270 packages, and two went **green while publishing images that
+  did not match their templates**. Nine root causes, the four layers that now
+  prevent it, and the invariant to keep (`cd web && npm run test:fidelity`).
+- [`.claude/SESSION-FINDINGS.md`](.claude/SESSION-FINDINGS.md) — verified facts
+  about the farm and build engine, plus corrections to the onboarding docs:
+  the CAC branch split that is one cleanup away from a farm-wide outage, why ISO
+  builds ship with no SBOM, two dead phase markers, the direction-dependent
+  proxy trap, and how to run a local build on a proxied host.
+
+Two rules distilled from that incident:
+
+1. **When triaging a farm failure, diff the job's `TEMPLATE_YAML` parameter
+   against the on-disk template first.** Job status says nothing about payload
+   integrity.
+2. **Prefer passing YAML through verbatim over reconstructing it.** Any
+   reconstruction is only as complete as the model behind it.
+
+---
+
 ## Key files
 
 - `internal/config/config.go` — `ImageTemplate` struct
