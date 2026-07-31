@@ -57,10 +57,19 @@ function asStringArray(v: unknown): string[] {
  * ------------------------------------------------------------------------- */
 
 /**
- * Parse a size literal into MiB. Accepts the ICT-preferred binary units
- * ('8GiB', '3500MiB'), the shorter 'G'/'M' shorthand, and the SI-ish
- * 'GB'/'MB' form (treated as binary for our purposes — the 4% error is
- * acceptable for disk-level authoring). Anything unparsable returns 0.
+ * Parse a size literal into MiB.
+ *
+ * Unit semantics MUST match the Go build engine, which is the authority on what
+ * a template means: internal/image/imagedisc/imagedisc.go:96-97 pairs
+ * ["KiB","MiB","GiB","K","M","G","KB","MB","GB"] with
+ * [1024, 1048576, 1073741824, 1024, 1048576, 1073741824, 1000, 1000000, 1000000000].
+ * So the binary forms (KiB/MiB/GiB) and the bare shorthand (K/M/G) are powers
+ * of two, while the SI forms (KB/MB/GB) are powers of ten.
+ *
+ * This previously treated MB as MiB "because the 4% error is acceptable for
+ * disk-level authoring". It is not: ubuntu24-aarch64-minimal-raw.yml writes
+ * `end: "513MB"`, and coercing that to 513MiB silently grew the ESP by ~1.3MB
+ * and shifted every following partition. Anything unparsable returns 0.
  */
 export function parseSizeToMiB(s: string): number {
   if (typeof s !== 'string') return 0
@@ -69,23 +78,30 @@ export function parseSizeToMiB(s: string): number {
   const n = parseFloat(m[1])
   if (!Number.isFinite(n)) return 0
   const unit = (m[2] || 'MiB').toLowerCase()
+  const MIB = 1048576
   switch (unit) {
+    // Binary (powers of two)
     case 'mib':
-    case 'mb':
     case 'm':
       return n
     case 'gib':
-    case 'gb':
     case 'g':
       return n * 1024
     case 'tib':
-    case 'tb':
     case 't':
       return n * 1024 * 1024
     case 'kib':
-    case 'kb':
     case 'k':
       return n / 1024
+    // SI (powers of ten) — converted to MiB via exact byte counts.
+    case 'kb':
+      return (n * 1000) / MIB
+    case 'mb':
+      return (n * 1000000) / MIB
+    case 'gb':
+      return (n * 1000000000) / MIB
+    case 'tb':
+      return (n * 1000000000000) / MIB
     default:
       return 0
   }
@@ -219,6 +235,10 @@ export function parseYamlToDraft(yaml: string): InteractiveDraft {
         flags,
       }
       if (fill) part.fillRemaining = true
+      // Capture the first partition's absolute start so the serializer can
+      // reproduce the template's alignment offset (usually 1MiB) instead of
+      // restarting the layout at 0MiB. See Partition.startOffsetMiB.
+      if (i === 0 && startMiB > 0) part.startOffsetMiB = startMiB
       const fsLabel = asString(pick(rec, 'fsLabel', 'FsLabel', 'FSLabel'))
       if (fsLabel) part.fsLabel = fsLabel
       const mountOptions = asString(pick(rec, 'mountOptions', 'MountOptions'))
@@ -307,6 +327,9 @@ export function parseYamlToDraft(yaml: string): InteractiveDraft {
     inheritedConfigurations,
     inheritedRepositories: Array.isArray(repos) ? (repos as unknown[]) : [],
     baseDoc: doc ?? null,
+    // Keep the seed text so an unedited draft can be dispatched verbatim
+    // rather than re-serialized. See InteractiveDraft.baseYaml.
+    baseYaml: doc ? yaml : null,
   }
 }
 
@@ -352,13 +375,33 @@ function singleUserFrom(u: UserConfig): Record<string, unknown> {
   return out
 }
 
+/**
+ * Structural equality over the user-editable half of an InteractiveDraft.
+ *
+ * `baseDoc` and `baseYaml` are provenance, not user state, so they're excluded
+ * — otherwise a draft would never compare equal to one re-derived from its own
+ * seed. Everything else is compared by value via JSON, which is sufficient
+ * because a draft is plain data (strings, numbers, booleans, arrays, and plain
+ * objects) with no undefined-vs-missing subtleties that matter here.
+ */
+function draftsEqual(a: InteractiveDraft, b: InteractiveDraft): boolean {
+  const strip = (d: InteractiveDraft) => {
+    const { baseDoc: _doc, baseYaml: _yaml, ...rest } = d
+    return rest
+  }
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b))
+}
+
 /** Convert a Partition[] back into the CoreV1 start/end representation. */
 function partitionsToYaml(
   parts: Partition[],
   diskMiB: number,
 ): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = []
-  let cursor = 0
+  // Honour the source layout's leading alignment gap (see
+  // Partition.startOffsetMiB). Starting at 0 shifted every boundary down by
+  // 1MiB relative to the template.
+  let cursor = parts.length > 0 ? (parts[0].startOffsetMiB ?? 0) : 0
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i]
     const isLast = i === parts.length - 1
@@ -568,11 +611,6 @@ export function applyOverrides(draft: InteractiveDraft): string {
 
   // disk
   //
-  // Schema requires `disk.name`. It's meant to be a stable identifier
-  // for the disk configuration; the seed templates (see
-  // image-templates/*.yml) use whatever the image itself is called, or
-  // a fixed sentinel like "Default_ISO". Mirror that: use the image
-  // name so it stays consistent with the top-level `image.name`.
   // WSL2 images have no partition table and no kernel of their own — they run
   // on the host's. The schema enforces this with a conditional branch: when
   // `target.imageType == "wsl2"`, `disk.partitionTableType`, `disk.partitions`
@@ -586,7 +624,17 @@ export function applyOverrides(draft: InteractiveDraft): string {
   // For wsl2 the schema pins `disk` to exactly {name, artifacts} with
   // additionalProperties:false — `size`, `partitionTableType` and `partitions`
   // are all rejected. Everything else gets the normal shape.
-  const diskOut: Record<string, unknown> = { name: draft.imageName }
+  //
+  // disk.name is its OWN identifier, not the image name. Templates use values
+  // like "Minimal_Raw" or "Default_ISO" and reuse them across images; the
+  // defaults merge keys the disk config off it. Overwriting it with
+  // draft.imageName silently renamed the disk config in 31 of 59 templates.
+  // Preserve the source value; fall back to the image name only when the
+  // source genuinely has none (schema requires disk.name).
+  const srcDiskName = asString(pick(srcDisk, 'name', 'Name'))
+  const diskOut: Record<string, unknown> = {
+    name: srcDiskName || draft.imageName,
+  }
   if (!isWsl2) {
     diskOut.size = formatGiB(draft.disk.sizeGiB)
     diskOut.partitionTableType = draft.disk.partitionTableType
@@ -617,8 +665,14 @@ export function applyOverrides(draft: InteractiveDraft): string {
   const srcSysCfg = pick(src, 'systemConfig', 'SystemConfig') as
     | Record<string, unknown>
     | undefined
+  // systemConfig.name selects which named system config the defaults merge
+  // applies (templates use "minimal", "edge", "robotics-jazzy", …), so it is
+  // NOT the image name. Overwriting it changed the resolved config in 42 of 59
+  // templates. Preserve the source; fall back to the image name only when
+  // absent.
+  const srcSysName = asString(pick(srcSysCfg, 'name', 'Name'))
   const sysCfg: Record<string, unknown> = {
-    name: draft.imageName,
+    name: srcSysName || draft.imageName,
   }
   if (draft.hostname) sysCfg.hostname = draft.hostname
   // Forbidden for wsl2 (see isWsl2 above). Also skipped when the source had no
@@ -695,6 +749,35 @@ export function applyOverrides(draft: InteractiveDraft): string {
   const final: Record<string, unknown> = {}
   for (const k of ALLOWED_TOP_LEVEL_KEYS) {
     if (doc[k] !== undefined) final[k] = doc[k]
+  }
+
+  // PRISTINE PASSTHROUGH.
+  //
+  // Reconstructing from the form model can only ever be as faithful as the
+  // model is complete, and it isn't: the form holds one user (templates ship
+  // three), no per-partition start offsets, no `flags: []`, no startupScript.
+  // Cycling templates in a dropdown without touching a single control must not
+  // change the template — so when the rebuilt doc is semantically equal to the
+  // seed, dispatch the seed's ORIGINAL bytes instead of our re-serialization.
+  //
+  // "Untouched" is decided by re-deriving a draft from the seed and comparing
+  // it to the CURRENT draft — not by comparing the reconstruction to the seed.
+  // The latter would never match for exactly the templates whose
+  // reconstruction is imperfect, which are the ones that need this most.
+  // Comparing draft-to-draft asks the right question: has the user changed
+  // anything the form can express? If not, the seed is authoritative.
+  //
+  // The re-derivation is cheap (a YAML parse plus field copies) and runs only
+  // on dispatch/preview, not per keystroke.
+  if (draft.baseYaml) {
+    try {
+      const pristine = parseYamlToDraft(draft.baseYaml)
+      if (draftsEqual(pristine, draft)) {
+        return draft.baseYaml
+      }
+    } catch {
+      // Unparseable seed: fall through to the reconstruction.
+    }
   }
 
   return YAML.stringify(final)

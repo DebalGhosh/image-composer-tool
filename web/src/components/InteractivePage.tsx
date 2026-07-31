@@ -1599,4 +1599,5 @@ const emptyDisplayDraft: InteractiveDraft = {
   inheritedConfigurations: [],
   inheritedRepositories: [],
   baseDoc: null,
+  baseYaml: null,
 }

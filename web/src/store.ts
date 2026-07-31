@@ -86,6 +86,19 @@ export interface Partition {
   name: string
   role: 'efi' | 'bios-boot' | 'swap' | 'root' | 'verity' | 'userdata' | 'custom'
   sizeMiB: number
+  /**
+   * Absolute start offset of the FIRST partition, in MiB, as written by the
+   * source template. Only meaningful on partitions[0]; later partitions are
+   * always packed end-to-end from the previous one.
+   *
+   * Templates conventionally start at 1MiB for alignment
+   * (`start: "1MiB"`, `end: "513MiB"`). The draft models partitions by SIZE,
+   * so without capturing this the serializer restarted at 0MiB and shifted
+   * every boundary down by 1MiB — silently changing the disk layout of 34 of
+   * the 59 shipped templates. Stored so an untouched round-trip reproduces the
+   * source byte-for-byte.
+   */
+  startOffsetMiB?: number
   fillRemaining?: boolean
   type: string
   fsType: string
@@ -135,6 +148,19 @@ export interface InteractiveDraft {
   inheritedRepositories: unknown[]
   /** Raw parsed YAML from the seed (or null when starting empty). */
   baseDoc: unknown | null
+  /**
+   * The seed's ORIGINAL YAML text, exactly as served. Retained so that a draft
+   * the user never edited can be dispatched byte-for-byte instead of being
+   * re-serialized from the form model.
+   *
+   * Reconstructing is inherently lossy: the form models a subset of the schema,
+   * so any field it doesn't represent (and any value it normalises differently
+   * — partition alignment, MB vs MiB, extra users) comes out changed. Cycling
+   * templates in a dropdown without touching a control must not alter the
+   * template, so applyOverrides short-circuits to this string when the draft
+   * still round-trips equal to it. null when authoring from scratch.
+   */
+  baseYaml: string | null
 }
 
 export const emptyInteractiveDraft: InteractiveDraft = {
@@ -155,6 +181,7 @@ export const emptyInteractiveDraft: InteractiveDraft = {
   inheritedConfigurations: [],
   inheritedRepositories: [],
   baseDoc: null,
+  baseYaml: null,
 }
 
 interface AppState {
