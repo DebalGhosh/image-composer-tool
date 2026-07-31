@@ -431,6 +431,22 @@ const PASSTHROUGH_SYSCFG_KEYS: readonly string[] = [
 ]
 
 /**
+ * Same contract as PASSTHROUGH_SYSCFG_KEYS, one level down: `disk` children the
+ * form doesn't edit. The form owns `name`, `size`, `partitionTableType`, and
+ * `partitions`; the schema permits eight.
+ *
+ * `artifacts` alone appears in 34 of the 59 shipped templates, and
+ * `extendLastPartitionToFillDisk` changes the on-disk layout — dropping either
+ * silently produces an image that differs from the template the user picked.
+ */
+const PASSTHROUGH_DISK_KEYS: readonly string[] = [
+  'artifacts',
+  'extendLastPartitionToFillDisk',
+  'path',
+  'selectionPolicy',
+]
+
+/**
  * Map the Go-side PascalCase package-repository shape back to the
  * camelCase keys the UserTemplate schema requires. Anything not on the
  * schema (`id`, `preseeds`, …) is dropped. Only non-empty values are
@@ -557,13 +573,44 @@ export function applyOverrides(draft: InteractiveDraft): string {
   // image-templates/*.yml) use whatever the image itself is called, or
   // a fixed sentinel like "Default_ISO". Mirror that: use the image
   // name so it stays consistent with the top-level `image.name`.
+  // WSL2 images have no partition table and no kernel of their own — they run
+  // on the host's. The schema enforces this with a conditional branch: when
+  // `target.imageType == "wsl2"`, `disk.partitionTableType`, `disk.partitions`
+  // and `systemConfig.kernel` are each `false` (forbidden outright). Emitting
+  // them anyway produces a schema-INVALID template that the farm rejects only
+  // after a worker has been queued, so gate them here.
+  const isWsl2 = draft.target.imageType === 'wsl2'
+
   const diskMiB = Math.max(1, Math.round(draft.disk.sizeGiB * 1024))
-  doc.disk = {
-    name: draft.imageName,
-    size: formatGiB(draft.disk.sizeGiB),
-    partitionTableType: draft.disk.partitionTableType,
-    partitions: partitionsToYaml(draft.disk.partitions, diskMiB),
+  const srcDisk = pick(src, 'disk', 'Disk') as Record<string, unknown> | undefined
+  // For wsl2 the schema pins `disk` to exactly {name, artifacts} with
+  // additionalProperties:false — `size`, `partitionTableType` and `partitions`
+  // are all rejected. Everything else gets the normal shape.
+  const diskOut: Record<string, unknown> = { name: draft.imageName }
+  if (!isWsl2) {
+    diskOut.size = formatGiB(draft.disk.sizeGiB)
+    diskOut.partitionTableType = draft.disk.partitionTableType
+    diskOut.partitions = partitionsToYaml(draft.disk.partitions, diskMiB)
   }
+  // Passthrough disk children the form doesn't edit — see
+  // PASSTHROUGH_DISK_KEYS. Booleans are preserved even when false, since
+  // `extendLastPartitionToFillDisk: false` is a meaningful override of a
+  // default-true OSV config.
+  //
+  // Unlike the systemConfig loop, an EMPTY STRING is preserved here: an
+  // explicit `disk.path: ""` is load-bearing. ubuntu24-x86_64-minimal-
+  // unattended-iso.yml sets it deliberately ("Keep path empty to enable
+  // policy-based disk selection at install time") and pairs it with
+  // selectionPolicy. Dropping the key would let a non-empty OSV default win
+  // and pin the install to a fixed device, defeating the policy.
+  for (const k of PASSTHROUGH_DISK_KEYS) {
+    if (diskOut[k] !== undefined) continue
+    const val = pick(srcDisk, k, k.charAt(0).toUpperCase() + k.slice(1))
+    if (val !== undefined && val !== null) {
+      diskOut[k] = val
+    }
+  }
+  doc.disk = diskOut
 
   // systemConfig — assemble child sections then whitelist to prevent
   // any unknown keys from sneaking through.
@@ -574,12 +621,26 @@ export function applyOverrides(draft: InteractiveDraft): string {
     name: draft.imageName,
   }
   if (draft.hostname) sysCfg.hostname = draft.hostname
-  sysCfg.kernel = {
-    version: draft.kernel.version,
-    cmdline: draft.kernel.cmdline,
-    packages: draft.kernel.packages,
-    enableExtraModules: draft.kernel.enableExtraModules,
-    uki: draft.kernel.uki,
+  // Forbidden for wsl2 (see isWsl2 above). Also skipped when the source had no
+  // kernel block at all and the form collected nothing: emitting
+  // `{version:"",cmdline:"",packages:[],enableExtraModules:"",uki:false}` would
+  // invent empty values that override the OSV defaults the template meant to
+  // inherit.
+  const srcKernel = pick(srcSysCfg, 'kernel', 'Kernel')
+  const kernelHasContent =
+    !!draft.kernel.version ||
+    !!draft.kernel.cmdline ||
+    (draft.kernel.packages && draft.kernel.packages.length > 0) ||
+    !!draft.kernel.enableExtraModules ||
+    draft.kernel.uki === true
+  if (!isWsl2 && (srcKernel !== undefined || kernelHasContent)) {
+    sysCfg.kernel = {
+      version: draft.kernel.version,
+      cmdline: draft.kernel.cmdline,
+      packages: draft.kernel.packages,
+      enableExtraModules: draft.kernel.enableExtraModules,
+      uki: draft.kernel.uki,
+    }
   }
   sysCfg.packages = draft.packages
   if (draft.user) {

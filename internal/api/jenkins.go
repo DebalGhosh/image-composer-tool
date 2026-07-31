@@ -47,8 +47,27 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"sigs.k8s.io/yaml"
+
+	"github.com/open-edge-platform/image-composer-tool/internal/config/validate"
 	"github.com/open-edge-platform/image-composer-tool/internal/utils/logger"
 )
+
+// validateDispatchYAML parses the dispatched template and validates it against
+// the UserTemplate half of os-image-template.schema.json — the same check
+// `image-composer-tool validate` performs. Returns a message safe to hand back
+// to the browser (schema errors name the offending JSON pointer, which is what
+// the operator needs to fix the template).
+func validateDispatchYAML(body string) error {
+	jsonBytes, err := yaml.YAMLToJSON([]byte(body))
+	if err != nil {
+		return fmt.Errorf("template is not valid YAML: %w", err)
+	}
+	if err := validate.ValidateUserTemplateJSON(jsonBytes); err != nil {
+		return fmt.Errorf("template failed schema validation: %w", err)
+	}
+	return nil
+}
 
 // artifactoryEcho catches the PUBLISH stage's marker line, e.g.:
 //
@@ -466,6 +485,26 @@ func (s *Server) handleJenkinsDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.YAML) == "" {
 		writeError(w, http.StatusBadRequest, "EMPTY_YAML", "template YAML is empty")
+		return
+	}
+
+	// Gate the payload against the template schema BEFORE burning a worker
+	// slot. Until this existed the only check was the empty-string test above,
+	// so any string at all -- unparseable YAML, a template missing image.name,
+	// a wsl2 image carrying a forbidden partition table -- was forwarded to
+	// Jenkins and only failed minutes later inside the ict-builder container,
+	// after the clone and Go build had already run.
+	//
+	// Deliberately the same validator the `validate` subcommand uses
+	// (validate.ValidateUserTemplateJSON against $defs/UserTemplate), so a
+	// payload accepted here is one the CLI would accept too. Note this catches
+	// malformed and schema-invalid YAML; it canNOT catch a payload that is
+	// schema-valid but has silently lost optional fields, because the schema
+	// marks almost everything optional. Fidelity is the client's
+	// responsibility -- see web/src/lib/draftFromYaml.ts.
+	if err := validateDispatchYAML(req.YAML); err != nil {
+		logger.Logger().Warnf("rejecting dispatch: %v", err)
+		writeError(w, http.StatusBadRequest, "INVALID_TEMPLATE", err.Error())
 		return
 	}
 
