@@ -658,7 +658,20 @@ export function applyOverrides(draft: InteractiveDraft): string {
       diskOut[k] = val
     }
   }
-  doc.disk = diskOut
+  // Only emit `disk` when the seed actually had one, or the operator supplied
+  // partitions of their own.
+  //
+  // 24 of the 59 shipped templates (every ISO and initrd variant) declare no
+  // disk block at all and inherit the OSV default. Emitting one unconditionally
+  // fabricated `{name, size: "8GiB", partitionTableType: "gpt", partitions: []}`
+  // out of the form's initial state, which then OVERRIDES that default. The
+  // result is schema-valid, so neither the backend guard nor `validate` can
+  // catch it — the same silent-wrong-image shape as the original bootloader
+  // incident. The pristine passthrough hides this while nothing is edited; this
+  // gate is what protects the edited path.
+  if (srcDisk !== undefined || draft.disk.partitions.length > 0) {
+    doc.disk = diskOut
+  }
 
   // systemConfig — assemble child sections then whitelist to prevent
   // any unknown keys from sneaking through.

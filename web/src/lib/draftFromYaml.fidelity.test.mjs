@@ -112,6 +112,43 @@ for (const f of files) {
 console.log(`edited-draft field preservation checked: ${editChecked}/${files.length}`)
 
 // ---------------------------------------------------------------------------
+// 2b. No section may be FABRICATED that the source did not declare.
+//
+//     24 of the 59 templates (every ISO/initrd variant) declare no `disk` and
+//     inherit the OSV default. Emitting one built from the form's initial state
+//     (`8GiB` / `gpt` / `partitions: []`) OVERRIDES that default. The result is
+//     schema-valid, so neither `validate` nor the backend guard can catch it —
+//     the same silent-wrong-image shape as the bootloader incident. Inventing a
+//     value is as damaging as dropping one.
+// ---------------------------------------------------------------------------
+const NEVER_FABRICATE = ['disk', 'systemConfig.kernel']
+let fabChecked = 0
+for (const f of files) {
+  const src = readFileSync(join(TEMPLATES, f), 'utf8')
+  const srcDoc = YAML.parse(src)
+  let draft
+  try {
+    draft = parseYamlToDraft(src)
+  } catch {
+    continue
+  }
+  let out
+  try {
+    out = applyOverrides({ ...draft, imageName: 'fidelity-probe' })
+  } catch {
+    continue
+  }
+  const outDoc = YAML.parse(out)
+  for (const path of NEVER_FABRICATE) {
+    if (deepGet(srcDoc, path) === undefined && deepGet(outDoc, path) !== undefined) {
+      fail(`${f}: ${path} was FABRICATED (absent in source, present in output)`)
+    }
+  }
+  fabChecked++
+}
+console.log(`no-fabrication checked: ${fabChecked}/${files.length}`)
+
+// ---------------------------------------------------------------------------
 // 3. Unit parsing must agree with the Go engine
 //    (internal/image/imagedisc/imagedisc.go:96-97): binary units and the bare
 //    shorthand are powers of two; the SI forms are powers of ten.
