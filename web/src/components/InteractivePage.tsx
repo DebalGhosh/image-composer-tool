@@ -389,9 +389,39 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
       }
       try {
         setSeedBusy(true)
-        const resp = await api.composeMerged(req)
-        const parsed = parseYamlToDraft(resp.yaml)
-        loadDraft(parsed)
+        // Two documents, two jobs.
+        //
+        // The MERGED form (?form=merged) is what populates the form: it has the
+        // OSV defaults folded in, so the operator sees resolved values rather
+        // than blanks. But it is a Go-marshalled dump — PascalCase keys plus
+        // internal fields (FullPkgList, DotFilePath, …) — and is NOT a valid
+        // user template. Dispatching it produces a document in which
+        // `systemConfig`, `disk`, `bootloader` and friends are simply absent,
+        // which the backend now rejects outright as INVALID_TEMPLATE.
+        //
+        // So the RAW template is fetched alongside it and stashed as the
+        // draft's baseYaml. That makes the raw template the passthrough
+        // reference: cycling seeds without editing dispatches the template
+        // exactly as it exists on disk, while the form still shows merged
+        // values. A raw fetch failure is non-fatal — we just lose the
+        // byte-exact passthrough and fall back to reconstruction.
+        const [merged, raw] = await Promise.all([
+          api.composeMerged(req),
+          api.compose(req).catch(() => null),
+        ])
+        if (raw?.yaml) {
+          // Raw available: the form is hydrated from the RAW template and the
+          // raw text becomes the passthrough reference, so what the operator
+          // sees is what gets dispatched. Showing merged values here would
+          // mean previewing one document and building another — the exact
+          // class of mismatch that shipped two wrong images.
+          loadDraft({ ...parseYamlToDraft(raw.yaml), baseYaml: raw.yaml })
+        } else {
+          // No raw form (older backend): fall back to the merged seed. The
+          // backend's schema guard will reject it on dispatch rather than let
+          // a Go-marshalled dump reach a worker.
+          loadDraft(parseYamlToDraft(merged.yaml))
+        }
         setSeedPick(String(idx))
       } catch (e) {
         toast.danger((e as Error).message, {

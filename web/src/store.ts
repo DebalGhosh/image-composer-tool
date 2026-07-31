@@ -244,7 +244,14 @@ const emptySelection: Selection = {
 // slice changes incompatibly — Zustand will drop the stale blob rather than
 // try to load it into the new shape.
 const PERSIST_KEY = 'ict.store'
-const PERSIST_VERSION = 1
+// Bumped 1 -> 2 when InteractiveDraft.baseYaml was introduced. A draft
+// persisted by the previous version has no baseYaml, so the pristine
+// passthrough in applyOverrides cannot fire and the draft would be
+// reconstructed (lossily) on dispatch. zustand's persist middleware discards
+// state whose version is older than this and no migrate() is supplied, which is
+// exactly what we want: a stale draft is cheap to reload from the seed dropdown
+// and expensive to dispatch wrong.
+const PERSIST_VERSION = 2
 
 export const useStore = create<AppState>()(
   persist(
