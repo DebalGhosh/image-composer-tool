@@ -410,6 +410,27 @@ const ALLOWED_TOP_LEVEL_KEYS: readonly string[] = [
 ]
 
 /**
+ * systemConfig children that are schema-legal but not editable in the
+ * Interactive form. They are carried over verbatim from the seed template so a
+ * round-trip through the form doesn't silently discard them.
+ *
+ * The form owns `name`, `hostname`, `kernel`, `packages`, `users`, and
+ * `configurations`; everything else the UserTemplate schema permits is listed
+ * here. Keep this list + the six form-owned keys equal to the schema's
+ * systemConfig properties — it is `additionalProperties: false`, so a key
+ * absent from both sets is a silent data loss and a key not in the schema is a
+ * hard validation failure.
+ */
+const PASSTHROUGH_SYSCFG_KEYS: readonly string[] = [
+  'bootloader',
+  'additionalFiles',
+  'description',
+  'immutability',
+  'initramfs',
+  'network',
+]
+
+/**
  * Map the Go-side PascalCase package-repository shape back to the
  * camelCase keys the UserTemplate schema requires. Anything not on the
  * schema (`id`, `preseeds`, …) is dropped. Only non-empty values are
@@ -546,6 +567,9 @@ export function applyOverrides(draft: InteractiveDraft): string {
 
   // systemConfig — assemble child sections then whitelist to prevent
   // any unknown keys from sneaking through.
+  const srcSysCfg = pick(src, 'systemConfig', 'SystemConfig') as
+    | Record<string, unknown>
+    | undefined
   const sysCfg: Record<string, unknown> = {
     name: draft.imageName,
   }
@@ -566,6 +590,32 @@ export function applyOverrides(draft: InteractiveDraft): string {
   if (draft.inheritedConfigurations.length > 0) {
     sysCfg.configurations = draft.inheritedConfigurations
   }
+
+  // Passthrough systemConfig children the Interactive form doesn't edit.
+  //
+  // Without this, a seed template's `bootloader` (and friends) were silently
+  // dropped on the way to Jenkins, so the OSV default won the defaults merge
+  // instead of the template's own value. That is not cosmetic: the ubuntu24
+  // raw default is `provider: systemd-boot`, while templates such as
+  // generic-handheld-os-template.yml set `provider: grub` AND purge the
+  // systemd-boot package (its postinst `bootctl install` fails in a chroot).
+  // Losing the override sent imageos down the systemd-boot branch looking for
+  // /usr/lib/systemd/boot/efi/systemd-bootx64.efi — a file the template had
+  // just purged — failing the build at "failed to configure UKI" after every
+  // package was already installed.
+  //
+  // Mirrors the top-level passthrough loop above: preserve from the seed doc
+  // when present, accept either camelCase or Go PascalCase, drop empties.
+  // Only schema-known keys (UserTemplate.systemConfig) are eligible, so this
+  // cannot reintroduce an additionalProperties:false rejection.
+  for (const k of PASSTHROUGH_SYSCFG_KEYS) {
+    if (sysCfg[k] !== undefined) continue // form-owned value wins
+    const val = pick(srcSysCfg, k, k.charAt(0).toUpperCase() + k.slice(1))
+    if (val !== undefined && val !== null && val !== '') {
+      sysCfg[k] = val
+    }
+  }
+
   doc.systemConfig = sysCfg
 
   // packageRepositories: whitelist each entry to schema keys, drop the
