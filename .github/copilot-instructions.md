@@ -232,6 +232,10 @@ This single file is loaded into every chat. Keep it lean — path-specific and w
   - [add-os-provider.prompt.md](prompts/add-os-provider.prompt.md)
 - **`.github/chatmodes/*.chatmode.md`** — Custom agent modes with restricted tool sets (e.g. a read-only "reviewer" mode). _Not yet added._
 - **`.vscode/mcp.json`** — Shared MCP servers (e.g. GitHub, fetch, container tooling) so every contributor's agent has the same capabilities. _Not yet added._
+- **`.claude/*.md`** — hard-won context from real incidents, each mandatory reading before touching the area it covers:
+  - [YAML-INTEGRITY.md](../.claude/YAML-INTEGRITY.md) — before editing `web/src/lib/draftFromYaml.ts`, `web/src/store.ts`, `internal/api/jenkins.go` or the template schema. A UI defect handed the Jenkins farm silently-corrupted `TEMPLATE_YAML` and two builds went green publishing images that did not match their templates.
+  - [SESSION-FINDINGS.md](../.claude/SESSION-FINDINGS.md) — verified farm and build-engine facts, plus corrections to the onboarding docs.
+  - [UI-LAYOUT.md](../.claude/UI-LAYOUT.md) — before adding any `sm:`/`md:`/`lg:`/`xl:` class under `web/src/components/`, putting `@container` on anything, or touching `--header-h`. Viewport breakpoints measure the wrong box: content lives in percentage-sized resizable panes.
 - **`AGENTS.md`** (repo root) — mirrors a subset of these instructions for non-Copilot agents (Cursor, Claude Code, etc.). Keep [AGENTS.md](../AGENTS.md) and this file in sync.
 
 When a section here grows past a screenful or only applies to a subdirectory, split it out into one of the above and leave a one-line summary + pointer behind.

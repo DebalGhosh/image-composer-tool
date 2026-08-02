@@ -121,8 +121,17 @@ For path-scoped detail, see `.github/instructions/`:
   the CAC branch split that is one cleanup away from a farm-wide outage, why ISO
   builds ship with no SBOM, two dead phase markers, the direction-dependent
   proxy trap, and how to run a local build on a proxied host.
+- [`.claude/UI-LAYOUT.md`](.claude/UI-LAYOUT.md) — **mandatory** before adding a
+  `sm:`/`md:`/`lg:`/`xl:` class under `web/src/components/`, putting
+  `@container` on anything, or touching `--header-h`. Viewport breakpoints
+  measure the wrong box here — content lives in percentage-sized resizable
+  panes, and over part of its range a viewport breakpoint is *anti-correlated*
+  with the width that matters. Also: why `container-type` silently kills
+  dropdowns and `position: fixed` overlays, why Tailwind v4 regenerates classes
+  you name in a comment, and which responsive work is still unfinished on
+  `main`.
 
-Two rules distilled from that incident:
+Two rules distilled from the YAML-integrity incident:
 
 1. **When triaging a farm failure, diff the job's `TEMPLATE_YAML` parameter
    against the on-disk template first.** Job status says nothing about payload

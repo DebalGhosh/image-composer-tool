@@ -174,9 +174,13 @@ Three-container topology in `docker-compose.yml`:
       │  → Packages.xz → dep11 AppStream → popcon by_inst, ingests
       │  to a new Bleve dir, atomic-swaps *bleve.Index under RWMutex.
       │  See internal/pkgsvc/index/bleve.go for the analyzer chain
-      │  (edge_ngram(2,15) on name, standard on summary/description,
-      │  keyword-lowercased on tags/categories/section) and boost table
-      │  (name.exact=20 down to description=1).
+      │  (edge_ngram(1,15) on name — min 1 so single-character queries
+      │  match, standard on summary/description, keyword-lowercased on
+      │  tags/categories/section) and boost table (name.exact=20 down
+      │  to description=1). The name.ngram/name.exact sub-fields need
+      │  their analyzer resolved QUERY-side too, not just in the field
+      │  mapping, or a typed term is analyzed differently than it was
+      │  indexed and matches nothing.
 
 Four tabs registered at `web/src/App.tsx`, each gated by
 `hidden={view !== 'x'}` on a wrapper div so tab-switches preserve
@@ -298,6 +302,19 @@ git):
   are usually the user's active triage session. Ask before killing;
   spin scratch instances on non-colliding ports (9098/9099) when you
   can.
+- **Dark mode is the product default.** A first-time visitor lands in
+  dark; `prefers-color-scheme` is deliberately NOT consulted, because a
+  default that follows the OS isn't a default. The rule is `stored !==
+  'light'`, so an absent key, an unreadable localStorage and a corrupt
+  value all resolve to dark. It is implemented in TWO places that must
+  agree — `readInitialTheme` in `web/src/store.ts` and the anti-FOUC
+  inline script in `web/index.html` (which runs before any module
+  loads). Changing only the store flashes light on every cold reload.
+- **Layout responsiveness has its own rules.** Read
+  `.claude/UI-LAYOUT.md` before adding a viewport breakpoint or an
+  `@container` under `web/src/components/`. Panes are percentage-sized,
+  so `md:`/`lg:` measure the wrong box, and `container-type` creates a
+  stacking context that makes dropdowns vanish if placed per-card.
 - **Meta-intel parity.** The ICT templatized pipeline mirrors the
   Yocto one under `cac/gen/lin/core-os/meta-intel-qa-templatized/`.
   Don't diverge the shape without explaining why in the commit
