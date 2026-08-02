@@ -78,12 +78,20 @@ export interface BuildAccepted {
 export interface Artifact {
   name: string
   type: 'image' | 'sbom'
-  // Path is the local on-disk path for local builds; for Jenkins-dispatched
-  // builds it's the artifact's job-relative path (display-only). URL is set
-  // for Jenkins artifacts and points at their direct download endpoint --
-  // when present, the UI prefers `url` over the proxy path.
+  // Path is the Artifactory repo-relative path for published images
+  // (`<repo>/<worker>/<datetime>/<file>`), or the artifact's job-relative
+  // path on the Jenkins fallback (display-only). URL points at the direct
+  // download -- when present, the UI prefers `url` over the proxy path.
   path?: string
   url?: string
+  // Provenance. 'artifactory' is the normal case: exactly one row, the disk
+  // image scraped from the PUBLISH stage's upload echoes. 'jenkins' is the
+  // fallback when nothing scrapable was published, listing whatever the
+  // pipeline archived (UPLOAD-MANIFEST.txt, image-composer-tool.log).
+  source?: 'artifactory' | 'jenkins'
+  // Byte count, only known for 'artifactory' artifacts (Jenkins' artifact
+  // listing doesn't report sizes). Absent/0 means unknown.
+  size?: number
 }
 
 // Jenkins-run metadata surfaced in BuildDetails for dispatched builds.

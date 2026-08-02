@@ -26,6 +26,18 @@
  * `position: fixed`, so z-index alone lifts it above every other
  * surface.
  *
+ * Two variants share all of the above machinery:
+ *   - `center` (default) — the original scale + fade modal.
+ *   - `drawer-right` — a full-height panel pinned to the right edge that
+ *     slides in horizontally. Used by BasicPage's template-YAML drawer.
+ *     CRITICAL: the slide animates `right`, NOT `transform`. A transform
+ *     on the panel would establish a containing block for
+ *     fixed-position descendants (CSS spec), trapping the YamlEditor
+ *     fullscreen overlay inside the 720px drawer instead of letting it
+ *     cover the viewport. `BasicPage.tsx` and `LiveYamlPreview.tsx` both
+ *     carry the same warning for the same reason. `position: relative`
+ *     offsets create no containing block, so `right` is safe.
+ *
  * The panel background / border / shadow are all driven by the
  * project's existing CSS variables (see `index.css`), so the dialog
  * automatically follows the light/dark theme toggle at `document.body.
@@ -54,6 +66,29 @@ export interface DialogOverlayProps {
    * default for future confirm-style dialogs.
    */
   size?: 'medium' | 'wide'
+  /**
+   * Panel placement + entry animation.
+   *  - `center` (default): the original centred scale + fade modal.
+   *    `size` controls its max-width.
+   *  - `drawer-right`: full-height panel pinned to the right edge,
+   *    sliding in horizontally. `size` is ignored (the drawer sets its
+   *    own width).
+   */
+  variant?: 'center' | 'drawer-right'
+  /**
+   * Whether the document-level Escape listener is installed. Defaults to
+   * true.
+   *
+   * Set false when a descendant owns Escape for its own dismissable
+   * layer. The concrete case: `YamlEditor`'s fullscreen mode registers
+   * its OWN capture-phase Escape handler, but only on entering
+   * fullscreen — ours is registered on mount and therefore runs first
+   * and `stopPropagation()`s, so Escape would tear down this whole
+   * dialog instead of just leaving fullscreen. BasicPage passes
+   * `closeOnEscape={!useYamlFullscreenActive()}` so the innermost layer
+   * always wins.
+   */
+  closeOnEscape?: boolean
   /** Panel body. Anything inside `<DialogOverlay>` renders inside the
    *  animated container; the mask, header slot, and close X sit
    *  outside. */
@@ -63,13 +98,37 @@ export interface DialogOverlayProps {
   className?: string
 }
 
-// One-frame delay before adding the `.visible` class so the transition
-// interpolates from the initial (opacity:0, scale:0.98, translateY:8px)
-// state. SSF uses `setTimeout(0)`; requestAnimationFrame is subtly
-// smoother because it aligns with the paint cycle.
+// Delay before adding the `.visible` class so the transition interpolates
+// from the initial (opacity:0, scale:0.98, translateY:8px) state — or, for
+// the drawer, from `right: -720px`.
+//
+// DOUBLE requestAnimationFrame, not single. A single rAF is not enough: the
+// `setEntered(true)` it schedules is a default-priority React 19 update
+// dispatched through Scheduler's MessageChannel, and that task can run
+// BEFORE the frame's style recalculation. When it does, `right: 0px` is
+// recalculated in the same pass that first computes `right: -720px`, so
+// there is no committed "from" value to interpolate and the transition
+// never runs at all — the panel simply appears at its final position.
+//
+// Measured on the drawer (6 trials per variant, watching for a `transitionrun`
+// event on `right`): single rAF fired 5/6 — i.e. it silently dropped the
+// animation one time in six, and dropped it far more often under load, which
+// is why raising DRAWER_SLIDE_MS from 260 to 400 to 560 changed nothing about
+// the entry. Double rAF fired 6/6. The second frame guarantees the closed
+// state has been through a full style-recalc-and-paint cycle first.
+//
+// A forced reflow (`void panel.offsetWidth`) was also tried and measured no
+// better than single rAF (5/6) — the read happens before React has committed
+// the closed style, so there is nothing to flush.
 function scheduleEntry(cb: () => void): () => void {
-  const raf = requestAnimationFrame(() => cb())
-  return () => cancelAnimationFrame(raf)
+  let inner = 0
+  const outer = requestAnimationFrame(() => {
+    inner = requestAnimationFrame(() => cb())
+  })
+  return () => {
+    cancelAnimationFrame(outer)
+    if (inner) cancelAnimationFrame(inner)
+  }
 }
 
 // A generous CSS selector for "focusable elements" — used by the focus
@@ -84,15 +143,46 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
+// Drawer width. `min()` with 100vw so narrow viewports get a full-bleed
+// sheet rather than a panel hanging off-screen. Referenced twice (width +
+// the closed `right` offset), so it lives in one constant.
+const DRAWER_WIDTH = 'min(720px, 100vw)'
+
+// Drawer slide duration, both directions. Much longer than the centred
+// modal's 220ms because the drawer travels its full 720px width where the
+// modal only scales 2%. Shared by the panel's `right` transition and the
+// mask's fade: if the mask finished first, the drawer would spend the tail of
+// its exit sliding across undimmed content.
+const DRAWER_SLIDE_MS = 560
+
+// Easing for the slide — deliberately NOT the house
+// `cubic-bezier(0.22, 0.7, 0.32, 1)` used everywhere else in this codebase.
+//
+// That curve is steeply front-loaded (initial slope ~3.2; it covers 56% of the
+// distance in the first 20% of the time). On a 2% scale or a colour fade you
+// read that as "crisp", but across 720px of travel it reads as a lunge that
+// then crawls to a stop — which is exactly the "too hasty" the user reported
+// at 400ms, and raising the duration alone doesn't fix it (at 600ms the house
+// curve still throws ~288px out in the first 80ms).
+//
+// This is easeOutQuad: initial slope 1.84 rather than 3.2, 50% of the travel
+// at 28% of the time rather than 17%. The motion starts at a believable speed
+// and decelerates over a long tail, so the panel feels carried rather than
+// flung. Local to the drawer — the centred variant keeps the house easing.
+const DRAWER_EASE = 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+
 export function DialogOverlay({
   open,
   onClose,
   title,
   ariaLabelledBy,
   size = 'wide',
+  variant = 'center',
+  closeOnEscape = true,
   children,
   className,
 }: DialogOverlayProps) {
+  const isDrawer = variant === 'drawer-right'
   // `mounted` gates whether we render the DOM tree at all. It flips true
   // on open, and back to false only AFTER the exit transition ends —
   // otherwise the panel disappears instantly rather than animating out.
@@ -127,8 +217,11 @@ export function DialogOverlay({
 
   // Escape-to-close (document-level, capture phase so we win against
   // any nested inputs). Same shape as YamlEditor's fullscreen handler.
+  //
+  // Skipped entirely when `closeOnEscape` is false so the key reaches a
+  // descendant layer's own handler (see the prop docs).
   useEffect(() => {
-    if (!mounted) return
+    if (!mounted || !closeOnEscape) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
@@ -138,7 +231,7 @@ export function DialogOverlay({
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [mounted, onClose])
+  }, [mounted, closeOnEscape, onClose])
 
   // Body scroll lock — restore on unmount.
   useEffect(() => {
@@ -165,12 +258,38 @@ export function DialogOverlay({
       panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
     // Focus late enough that the transition has begun — otherwise
     // Safari can occasionally skip the focus ring paint.
-    const raf = requestAnimationFrame(() => autoFocus?.focus())
+    //
+    // `preventScroll` is REQUIRED, not a nicety, and specifically for the
+    // drawer. This fires one frame into the slide, when the panel is still
+    // at `right: -720px` — so the element being focused is off-screen inside
+    // the mask's scrollable overflow. `focus()` scrolls ancestors to reveal
+    // its target, and `overflow: hidden` boxes (unlike `overflow: clip`) are
+    // still programmatically scrollable, so the mask gets `scrollLeft ≈ 720`.
+    // On-screen position is `layoutRight(t) - scrollLeft(t)`, and the browser
+    // re-clamps scrollLeft every frame as the overflow shrinks — pinning the
+    // panel at the viewport edge for the whole slide.
+    //
+    // Measured without it: `scrollLeft` 0→720 on the first frame, snapping
+    // the panel's visual left from 1279 straight to 559 (its final resting
+    // position), then ~540ms of no visible movement while `right` interpolated
+    // underneath. With it: `scrollLeft` stays 0 and visual left actually
+    // tracks 1279→1239→1199→1159. That instant 720px jump was the "jarring"
+    // entry, and it is exactly why no duration or easing value ever helped.
+    //
+    // Entry-only by construction, which matches the reported asymmetry: the
+    // exit path runs only this effect's cleanup, and the sole focus() during
+    // exit is the return-focus at `onTransitionEnd` below, which fires after
+    // the slide and targets the trigger outside the mask.
+    const raf = requestAnimationFrame(() =>
+      autoFocus?.focus({ preventScroll: true }),
+    )
 
     const onFocusIn = (e: FocusEvent) => {
       const t = e.target as Node | null
       if (t && !panel.contains(t)) {
-        autoFocus?.focus()
+        // Same reasoning as above: a focus yanked back mid-slide must not
+        // scroll the mask.
+        autoFocus?.focus({ preventScroll: true })
       }
     }
     document.addEventListener('focusin', onFocusIn)
@@ -185,6 +304,17 @@ export function DialogOverlay({
   // ring inside the panel even when the browser would normally advance.
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab') return
+    // A descendant that owns its own focus trap has already handled this.
+    // React handlers bubble inner→outer, and a nested trap focuses
+    // synchronously — so by the time we run, `document.activeElement` is
+    // already the element IT chose, and re-running our cycle here would
+    // override it. Concretely: YamlEditor's fullscreen trap (inside
+    // BasicPage's drawer) moves focus to its own toggle button, which
+    // happens to be `last` in our list, so we'd bounce focus straight back
+    // to the close X sitting hidden behind the fullscreen overlay.
+    // YamlEditor.tsx guards its handler the same way and for the same
+    // reason.
+    if (e.defaultPrevented) return
     const panel = panelRef.current
     if (!panel) return
     const focusables = Array.from(
@@ -237,45 +367,112 @@ export function DialogOverlay({
     inset: 0,
     zIndex: 100,
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
     // rgba(0,0,0,0.55) reads well against both light and dark themes;
     // the +4px blur pairs the dim with a slight frosted-glass depth
     // that matches BasicPage.tsx's sticky action-footer backdrop.
+    //
+    // The blur is a `filter`-family property, which ALSO establishes a
+    // containing block for fixed descendants — harmless here because the
+    // mask is already the full viewport, so "trapped to the mask" and
+    // "covering the viewport" are the same rectangle. It must not be
+    // pushed down onto the drawer panel.
     background: 'rgba(0, 0, 0, 0.55)',
     backdropFilter: 'blur(4px)',
     WebkitBackdropFilter: 'blur(4px)',
-    // Mask itself fades in/out; the panel does the scale + translate.
+    // Mask itself fades in/out; the panel does the scale (centred) or the
+    // horizontal slide (drawer). The drawer's fade is stretched to match its
+    // slower slide so dim and travel stay in lockstep.
     opacity: entered ? 1 : 0,
-    transition: 'opacity 220ms cubic-bezier(0.22, 0.7, 0.32, 1)',
-    padding: '4vh 4vw',
-    // Overflow so a small viewport can still scroll past the panel.
-    overflowY: 'auto',
+    transition: isDrawer
+      ? `opacity ${DRAWER_SLIDE_MS}ms ${DRAWER_EASE}`
+      : 'opacity 220ms cubic-bezier(0.22, 0.7, 0.32, 1)',
+    ...(isDrawer
+      ? {
+          // Stretch full-height and pin the panel to the trailing edge.
+          alignItems: 'stretch',
+          justifyContent: 'flex-end',
+          padding: 0,
+          // Not overflowY:auto — the panel sits at right:-720px for one
+          // frame on entry and again through the exit, which would otherwise
+          // compute overflow-x to `auto` and flash a horizontal scrollbar
+          // mid-slide.
+          //
+          // `clip` rather than `hidden`: a `hidden` box is still a scroll
+          // CONTAINER, just without visible scrollbars, so anything that
+          // scrolls programmatically — notably `focus()` revealing an
+          // off-screen descendant — can shift it and cancel the slide (see
+          // the preventScroll note in the focus effect). `clip` creates no
+          // scroll container at all, so that class of bug cannot recur here
+          // even if a future caller focuses something itself. The two are
+          // otherwise visually identical for this box.
+          //
+          // Safe on the containing-block axis: `overflow` is not in the
+          // transform/filter/perspective/will-change/contain family, so it
+          // does NOT trap YamlEditor's fixed fullscreen overlay.
+          overflow: 'clip',
+        }
+      : {
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '4vh 4vw',
+          // Overflow so a small viewport can still scroll past the panel.
+          overflowY: 'auto',
+        }),
   }
 
-  const panelStyle: CSSProperties = {
-    position: 'relative',
-    width: '100%',
-    maxWidth: size === 'wide' ? '1200px' : '640px',
-    // A generous but bounded height so the dialog never exceeds the
-    // viewport; internal columns handle their own scroll.
-    maxHeight: '92vh',
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--section-background)',
-    border: '1px solid var(--border-color)',
-    borderRadius: '12px',
-    boxShadow: 'var(--options-shadow)',
-    color: 'var(--font-color)',
-    overflow: 'hidden',
-    // Entry transition — matches the easing YamlEditor uses for its
-    // fullscreen entry. 220ms feels crisp without being twitchy.
-    transform: entered ? 'scale(1) translateY(0)' : 'scale(0.98) translateY(8px)',
-    opacity: entered ? 1 : 0,
-    transition:
-      'transform 220ms cubic-bezier(0.22, 0.7, 0.32, 1), ' +
-      'opacity 220ms cubic-bezier(0.22, 0.7, 0.32, 1)',
-  }
+  const panelStyle: CSSProperties = isDrawer
+    ? {
+        position: 'relative',
+        // `right` is what animates. NOT transform — see the header note.
+        right: entered ? '0px' : `calc(-1 * ${DRAWER_WIDTH})`,
+        width: DRAWER_WIDTH,
+        maxWidth: 'none',
+        height: '100vh',
+        maxHeight: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--section-background)',
+        // Leading edge only — the other three sides meet the viewport.
+        borderLeft: '1px solid var(--border-color)',
+        borderRadius: 0,
+        boxShadow: 'var(--options-shadow)',
+        color: 'var(--font-color)',
+        overflow: 'hidden',
+        // Duration + easing live in DRAWER_SLIDE_MS / DRAWER_EASE — see the
+        // notes there for why this curve isn't the house one.
+        //
+        // The slide is the ONLY transition here — deliberately no opacity
+        // fade. A solid drawer sliding in shouldn't be translucent en
+        // route, and more importantly `onTransitionEnd` is what triggers
+        // unmount: a second, shorter opacity transition would fire first
+        // and cut the slide off partway.
+        transition: `right ${DRAWER_SLIDE_MS}ms ${DRAWER_EASE}`,
+      }
+    : {
+        position: 'relative',
+        width: '100%',
+        maxWidth: size === 'wide' ? '1200px' : '640px',
+        // A generous but bounded height so the dialog never exceeds the
+        // viewport; internal columns handle their own scroll.
+        maxHeight: '92vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--section-background)',
+        border: '1px solid var(--border-color)',
+        borderRadius: '12px',
+        boxShadow: 'var(--options-shadow)',
+        color: 'var(--font-color)',
+        overflow: 'hidden',
+        // Entry transition — matches the easing YamlEditor uses for its
+        // fullscreen entry. 220ms feels crisp without being twitchy.
+        transform: entered
+          ? 'scale(1) translateY(0)'
+          : 'scale(0.98) translateY(8px)',
+        opacity: entered ? 1 : 0,
+        transition:
+          'transform 220ms cubic-bezier(0.22, 0.7, 0.32, 1), ' +
+          'opacity 220ms cubic-bezier(0.22, 0.7, 0.32, 1)',
+      }
 
   return (
     <div

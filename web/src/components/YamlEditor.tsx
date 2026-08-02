@@ -103,6 +103,26 @@ function subscribeFullscreen(cb: () => void): () => void {
   }
 }
 
+/**
+ * True while ANY YamlEditor on the page is in fullscreen mode.
+ *
+ * Read-only window onto the singleton above, for surrounding chrome that
+ * has to defer to the fullscreen overlay. The concrete consumer is
+ * BasicPage's template-YAML drawer: `DialogOverlay` registers its Escape
+ * handler on mount and `stopPropagation()`s, so it would swallow the key
+ * that should merely exit fullscreen. Passing
+ * `closeOnEscape={!useYamlFullscreenActive()}` makes the innermost layer
+ * win — first Escape leaves fullscreen, second closes the drawer.
+ */
+export function useYamlFullscreenActive(): boolean {
+  const [active, setActive] = useState(() => activeFullscreenOwner !== null)
+  useEffect(
+    () => subscribeFullscreen(() => setActive(activeFullscreenOwner !== null)),
+    [],
+  )
+  return active
+}
+
 // Inline SVG icons (kept tiny to avoid a lucide-react-style dep). 16px viewBox.
 function ExpandIcon() {
   return (

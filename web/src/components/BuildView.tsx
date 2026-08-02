@@ -263,6 +263,13 @@ export function BuildView({
   const copyPath = (path: string) => navigator.clipboard.writeText(path)
   const copyCommand = () => details && navigator.clipboard.writeText(details.command)
 
+  // True once the backend resolved the published disk image out of the
+  // PUBLISH stage's upload echoes. That single row already carries the full
+  // Artifactory file URL, which makes the highlighted *directory* row above
+  // it redundant — so it's suppressed. On the fallback path (no scrapable
+  // upload) this stays false and the directory row renders as before.
+  const hasPublishedImage = artifacts.some((a) => a.source === 'artifactory')
+
   // Server has no record of this build — usually a localStorage row that
   // outlived a backend restart. Render an explicit empty state so the pane
   // doesn't misrepresent the situation as "Failed + Waiting for build
@@ -295,7 +302,29 @@ export function BuildView({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    /* Two responsibilities on this one element, both load-bearing:
+     *
+     * 1. @container — makes this pane the reference box for the `@max-pane-*`
+     *    utilities below (the summary grid, the stepper connectors, the
+     *    SummaryPanel key column). The right pane can be dragged to 30%, so a
+     *    viewport query would measure a box more than three times too wide.
+     *    Safe as a stacking context: BuildView imports no YamlEditor and no
+     *    DialogOverlay, so it has no position:fixed descendant, and the
+     *    terminal uses native requestFullscreen, which promotes to the
+     *    browser's top layer and ignores containment entirely.
+     *
+     * 2. overflow-y-auto — this column stacks five flex-none blocks above one
+     *    flex-1 grower, and Panel injects `overflow: hidden`, so without a
+     *    scroll container short screens CLIP instead of scrolling and the
+     *    Artifacts card becomes unreachable at 720px tall.
+     *
+     *    The usual trap does not apply: making a flex container scrollable is
+     *    only fatal if its height goes auto (then flex-1 + min-h-0 resolves
+     *    the terminal to 0 and TerminalLog's clientHeight===0 guard makes
+     *    fit() bail permanently). Height stays DEFINITE here — this is
+     *    `flex-1 min-h-0` inside BuildImagePage's `h-full` — so overflow-y
+     *    only changes what happens once content exceeds the box. */
+    <div className="@container flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
       {/*
        * Compact status strip. What used to live in a dedicated Build
        * Status card now spreads across two places:
@@ -307,18 +336,24 @@ export function BuildView({
        *     the App-level dispatch state, not the history entry.
        */}
       {/* Phase stepper — shows where the build currently is. Stays visible
-          through the terminal state: on failure/cancel the step where things
-          stopped flashes red, so the user can see at a glance whether the
-          break was early (dispatch) or late (publish). Suppressed only on
-          `success` because the artifacts card then dominates the view and
-          the "all green" stepper would be redundant. */}
-      {status !== 'success' && (
-        <BuildProgress
-          phase={phase}
-          install={install}
-          failed={status === 'failed' || status === 'cancelled'}
-        />
-      )}
+          through EVERY terminal state:
+            - failure/cancel: the step where things stopped flashes red, so
+              the user can see at a glance whether the break was early
+              (dispatch) or late (publish);
+            - success: all seven steps green, sitting directly above the
+              populated Artifacts card. This is the point of the stepper's
+              `publishing` step — the server holds `publishing` for the whole
+              1-2 min Artifactory upload and only emits `done` alongside the
+              `complete` event that carries the links, so "Publishing
+              artifacts ✓" and the hyperlinks appear in the same paint.
+              Unmounting on success (as this used to) meant the all-green
+              frame was never rendered at all. */}
+      <BuildProgress
+        phase={phase}
+        install={install}
+        failed={status === 'failed' || status === 'cancelled'}
+      />
+
       {(status === 'failed' || status === 'cancelled') && (
         <div
           className="flex-none rounded-md border p-3 text-xs"
@@ -354,9 +389,14 @@ export function BuildView({
 
       {/* Summary — rendered inline when the build path carries one
           (Basic-tab dispatches). Interactive/Advanced dispatches don't
-          set summary; this block collapses cleanly in that case. */}
+          set summary; this block collapses cleanly in that case.
+
+          The two panels sit side by side while there's room, gated by a
+          container query rather than the `xl` viewport breakpoint: this pane
+          can be dragged to 30% (~384px at a 1280 viewport) while a viewport
+          query is still firing and cheerfully halving it again. */}
       {details?.summary && (
-        <div className="grid flex-none grid-cols-1 gap-3 xl:grid-cols-2">
+        <div className="@max-pane-4col:grid-cols-1 grid flex-none grid-cols-2 gap-3">
           <SummaryPanel
             heading="Selection"
             rows={
@@ -666,7 +706,20 @@ export function BuildView({
             </IconAction>
           </div>
         }
-        className="flex min-h-0 flex-1 flex-col"
+        /* The floor REPLACES the old min-h-0 (both set min-height, so keeping
+         * both would just be a specificity coin-flip). flex-1 is untouched:
+         * on a tall screen this still stretches exactly as before — no change
+         * at 1920x1080 — but on a short one the floor stops the five flex-none
+         * siblings from squeezing the terminal toward zero. The deficit goes
+         * to the parent's overflow-y instead, so Artifacts stays reachable.
+         *
+         * Shrink-to-zero is still available where it's actually needed: the
+         * inner terminal wrapper below keeps its own min-h-0.
+         *
+         * min-h rather than a fixed h- so native fullscreen needs no
+         * !important — `.terminal-fullscreen-host:fullscreen`'s height:100vh
+         * already beats a min-height of 18rem. */
+        className="flex min-h-[var(--term-min-h)] flex-1 flex-col"
       >
         {/* min-h-0 is critical on flex children -- default min-height:auto
             would prevent the terminal from shrinking below its content size,
@@ -698,14 +751,22 @@ export function BuildView({
       </Card>
 
       {/*
-       * ARTIFACTS — appears only when something to link at. The
-       * Artifactory row is highlighted more prominently than the
-       * individual file rows because that's the shareable outcome for
-       * downstream consumers.
+       * ARTIFACTS — appears only when there's something to link at.
+       *
+       * Normal case: exactly ONE row, the disk image's direct Artifactory
+       * URL. The multi-GB image is never a Jenkins artifact (the pipeline
+       * archives only UPLOAD-MANIFEST.txt + image-composer-tool.log), so the
+       * backend scrapes it out of artifactory-upload.sh's per-file echoes and
+       * composes the URL. That row supersedes the highlighted Artifactory
+       * *directory* row, which is therefore hidden — see hasPublishedImage.
+       *
+       * Fallback (PUBLISH skipped / echo format drifted / build died before
+       * Phase 6): the Jenkins-archived list plus the directory row, exactly
+       * as this card rendered before.
        */}
       {(artifacts.length > 0 || details?.jenkins?.artifactoryUrl) && (
         <Card title="Artifacts" titleStyle="section" className="flex-none">
-          {details?.jenkins?.artifactoryUrl && (
+          {details?.jenkins?.artifactoryUrl && !hasPublishedImage && (
             <div
               className="mb-3 flex flex-wrap items-center gap-3 rounded-md border p-3 text-xs"
               style={{
@@ -790,11 +851,18 @@ export function BuildView({
                     a.url ??
                     `/api/v1/builds/${buildId}/artifacts/${encodeURIComponent(a.name)}`
                   const display = a.path ?? a.url ?? a.name
+                  // Size is only known for published (Artifactory) artifacts;
+                  // surfaced as a row tooltip rather than a new column so the
+                  // 4-column layout is untouched.
+                  const rowTitle = a.size
+                    ? `${a.name} — ${formatBytes(a.size)}`
+                    : a.name
                   return (
                     <tr
                       key={a.name + ':' + i}
                       className="border-b"
                       style={{ borderColor: 'var(--border-color)' }}
+                      title={rowTitle}
                     >
                       <td className="px-3 py-2 font-mono text-xs">
                         {a.url ? (
@@ -831,8 +899,17 @@ export function BuildView({
                               borderColor: 'var(--border-color)',
                               color: 'var(--muted-color)',
                             }}
-                            title="Copy path or URL to clipboard"
-                            onClick={() => copyPath(display)}
+                            title={
+                              a.url
+                                ? 'Copy download URL to clipboard'
+                                : 'Copy path to clipboard'
+                            }
+                            // Prefer the URL over `display`: the PATH column
+                            // now shows the Artifactory repo-relative path,
+                            // which isn't independently fetchable. The full
+                            // URL is what the operator pastes into curl / a
+                            // browser / a downstream job.
+                            onClick={() => copyPath(a.url ?? display)}
                           >
                             Copy
                           </button>
@@ -862,6 +939,22 @@ export function BuildView({
       )}
     </div>
   )
+}
+
+/**
+ * Compact human-readable byte count for the artifact row's tooltip. 1024-based
+ * to match how ICT reports sizes elsewhere (cf. formatSize in
+ * SegmentedPartitionEditor, which works in MiB rather than raw bytes).
+ */
+function formatBytes(bytes: number): string {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  let v = bytes
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${i === 0 ? v : v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`
 }
 
 /**

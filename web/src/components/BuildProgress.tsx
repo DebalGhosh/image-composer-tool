@@ -6,12 +6,21 @@
 // flow: adds a "Dispatching" step at the front (covers the queue wait +
 // docker-pull window before ICT itself starts) and a "Publishing" step at the
 // back (covers the Artifactory upload, which for our images typically takes
-// 1-2 minutes AFTER ICT reports "Done"). Colours are driven by our CSS
-// variables so the stepper sits correctly in both light and dark themes.
+// 1-2 minutes AFTER the ICT container reports its own completion). Colours are
+// driven by our CSS variables so the stepper sits correctly in both light and
+// dark themes.
+//
+// The terminal "Done" step is reached ONLY via the server's authoritative
+// phase event, which fires alongside the `complete` event carrying the artifact
+// links — see internal/api/phases.go and sse.go. So "Publishing artifacts ✓"
+// and the hyperlinks in the Artifacts card appear in the same paint, and the
+// stepper is never green while the upload is still streaming. BuildView keeps
+// this component mounted through success so that all-green frame is actually
+// rendered.
 //
 // Compact-labels design (per user request 2026-07-23):
-//   * Only the currently-active step shows its text label — inactive steps
-//     collapse to just the numbered circle.
+//   * By default only the currently-active step shows its text label —
+//     the rest collapse to just the numbered circle.
 //   * As phase advances, the active step's label collapses (max-width → 0,
 //     opacity → 0) while the newly-active step's label expands from 0 to its
 //     natural width, giving a horizontal "sliding" effect.
@@ -19,6 +28,28 @@
 //     ease-out so the whole row shifts state as one motion.
 //   * A failed step keeps its label so the user can still see WHERE the
 //     build stopped without hovering; the circle turns red with an ✕.
+//
+// Hover reveal (per user request 2026-08-02):
+//   * Hovering ANY step — already-completed or not-yet-started — slides its
+//     label in using the exact same max-width/opacity/margin transition,
+//     and slides it back out on leave. Labels are always in the DOM, so this
+//     is purely a visibility flip; nothing mounts or unmounts on hover.
+//   * Weight distinguishes the two reasons a label can be visible: the
+//     active step is 600, a merely-hovered one stays 400. So bold+coloured
+//     = "this is where the build is", regular+coloured = "you're pointing
+//     at this".
+//   * Pointer-only by design — no tabIndex/onFocus. The wrapper's
+//     role="progressbar" is a "children presentational" ARIA role, so
+//     assistive tech already ignores this subtree and announces only
+//     aria-label/aria-valuenow; adding focusable descendants to such a role
+//     would be invalid. Screen-reader users therefore lose nothing here.
+//   * Because the reveal is in-flow, a long label (worst case "Resolving &
+//     downloading packages") pushes its siblings right and can wrap the
+//     flex-wrap <ol> onto a second line for the duration of the hover. That
+//     is the accepted trade-off for matching the phase-advance motion
+//     exactly rather than floating a tooltip over the row.
+
+import { useState } from 'react'
 
 interface BuildProgressProps {
   // Current phase id (one of PHASES.id).
@@ -27,6 +58,45 @@ interface BuildProgressProps {
   install: { done: number; total: number }
   // Whether the build failed — the active step is shown in red.
   failed?: boolean
+}
+
+/**
+ * Straight-stroke check mark for completed steps (per user request
+ * 2026-08-02).
+ *
+ * Replaces the literal '✓' (U+2713 CHECK MARK) this used to render. That
+ * glyph's curve and stroke taper are baked into the font outline, so it can't
+ * be straightened with CSS — the fix has to be a drawn path.
+ *
+ * Two straight segments meeting at a sharp vertex. `strokeLinejoin="miter"`
+ * and `strokeLinecap="butt"` are the SVG defaults but stated explicitly
+ * because every other icon in this codebase uses `round` for both, and an
+ * inherited or copy-pasted `round` is exactly what would re-round the corner.
+ * The vertex angle is ~86°, giving a miter ratio of ~1.5 — well inside the
+ * default miterLimit of 4, so the join renders as a true point rather than
+ * silently falling back to bevel.
+ *
+ * Follows the file-local icon convention: inline SVG, `currentColor` (so it
+ * picks up the circle's white `color`), `aria-hidden` (the wrapping circle is
+ * already aria-hidden, and role="progressbar" makes this subtree
+ * presentational anyway).
+ */
+function CheckIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.25"
+      strokeLinecap="butt"
+      strokeLinejoin="miter"
+      aria-hidden="true"
+    >
+      <path d="M3.5 8.5L6.5 11.5L12.5 4.5" />
+    </svg>
+  )
 }
 
 const PHASES: { id: string; label: string }[] = [
@@ -51,6 +121,10 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
     PHASES.findIndex((p) => p.id === phase),
   )
 
+  // Index of the step the pointer is currently over, or null. Drives the
+  // label reveal for steps that aren't the active one.
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+
   return (
     <div
       className="flex-none rounded-md border p-3"
@@ -71,9 +145,15 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
           const active = i === currentIdx && phase !== 'done'
           const complete = phase === 'done' && i === PHASES.length - 1
           const isFailed = failed && i === currentIdx
-          // Label is visible only when the step is the current phase (running
-          // OR failed on it). Everything else shows just the circle.
-          const showLabel = active
+          const hovered = i === hoveredIdx
+          // Visible when the step is the current phase (running or failed on
+          // it), the terminal Done step, or while the pointer is over it.
+          // `isFailed` is spelled out rather than folded into `active`, because
+          // `active` excludes the terminal phase — without it the failed step's
+          // label stayed collapsed, contradicting the header comment above.
+          // `complete` is included for the same reason on the success side: the
+          // final frame should read "✓ Done", not seven bare circles.
+          const showLabel = active || !!isFailed || hovered || complete
 
           // Circle colour cascade: failure > done/complete > active > future.
           // All four states use the same TRANSITION so a step going
@@ -97,9 +177,11 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
             transition: TRANSITION,
             color: isFailed
               ? 'var(--danger)'
-              : active
+              : active || hovered
                 ? 'var(--font-color)'
                 : 'var(--muted-color)',
+            // Weight is what separates "this step is running" from "you're
+            // just pointing at this step" — a hovered label reads at 400.
             fontWeight: active || isFailed ? 600 : 400,
             // A tall max-width upper bound so any real label fits; the
             // browser's overflow:hidden + whitespace-nowrap clip anything
@@ -122,7 +204,22 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
           }
 
           return (
-            <li key={p.id} className="flex items-center">
+            <li
+              key={p.id}
+              className="flex items-center"
+              // Hover reveal. On the <li> rather than the circle so the
+              // label itself stays inside the hover target — anchoring to
+              // the circle alone would make an expanded label flicker as
+              // the pointer drifted onto the text it just revealed.
+              onMouseEnter={() => setHoveredIdx(i)}
+              onMouseLeave={() =>
+                // Guard against a stale clear: if the pointer has already
+                // moved to a neighbouring step, that step's mouseenter has
+                // fired first and owns the state.
+                setHoveredIdx((cur) => (cur === i ? null : cur))
+              }
+              style={{ cursor: 'default' }}
+            >
               <span
                 className={
                   'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ' +
@@ -131,7 +228,7 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
                 style={circleStyle}
                 aria-hidden="true"
               >
-                {isFailed ? '✕' : done || complete ? '✓' : i + 1}
+                {isFailed ? '✕' : done || complete ? <CheckIcon /> : i + 1}
               </span>
               <span
                 className="inline-block overflow-hidden whitespace-nowrap text-[11px]"
@@ -154,7 +251,7 @@ export function BuildProgress({ phase, install, failed }: BuildProgressProps) {
               </span>
               {i < PHASES.length - 1 && (
                 <span
-                  className="mx-2 hidden h-px w-6 sm:inline-block lg:w-10"
+                  className="@min-pane-2col:inline-block @min-pane-4col:w-10 mx-2 hidden h-px w-6"
                   style={connectorStyle}
                   aria-hidden="true"
                 />

@@ -41,7 +41,24 @@ export function BuildHistoryList({
   onCancel,
 }: BuildHistoryListProps) {
   return (
-    <div className="flex h-full flex-col">
+    // Distinct surface for the whole history pane (per user request
+    // 2026-08-02). --section-background is the card token: white against the
+    // page's #f4f5f5 in light, and DELIBERATELY darker than the page in dark
+    // (#242528 on #2e2f32 — see the note at index.css:67), so the pane reads
+    // as a separate surface in both themes rather than only one.
+    //
+    // The right border is on this element, not the Panel, so it hugs the list
+    // and sits just inside the 8px drag handle. The parent Panel sets
+    // `overflow: hidden` (BuildImagePage.tsx:166), which clips the border when
+    // the pane animates to 0% width on collapse — no stray 1px line left
+    // behind against the divider.
+    <div
+      className="flex h-full flex-col"
+      style={{
+        background: 'var(--section-background)',
+        borderRight: '1px solid var(--border-color)',
+      }}
+    >
       <header
         className="flex flex-none items-center justify-between px-4 py-3"
         style={{ borderBottom: '1px solid var(--border-color)' }}
