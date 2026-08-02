@@ -75,15 +75,28 @@ func run() error {
 		_ = idx.Close()
 	}()
 
+	if idx.WasRebuilt() {
+		log.Warn("index mapping changed; previous index moved aside and rebuilt empty",
+			"staleDir", idx.StaleDir())
+	}
+
 	// Seed corpus: only ingest embedded shards when the index is empty.
-	// A restart on top of a persisted volume finds records already
-	// present and skips the seed to avoid overwriting a live crawl.
+	// DocCount() now reads through to Bleve, so this guard reflects what is
+	// actually on disk. A warm restart over a populated volume — 44 seed docs
+	// or a full crawl — therefore does NOT re-run the seed. Before, DocCount()
+	// read 0 after every reopen, so the seed was silently re-ingested on every
+	// boot; that accident was the only thing repopulating the in-memory record
+	// mirror, and it would have overwritten real crawled metadata with the thin
+	// seed projection once the crawler was enabled (the seed's synthetic
+	// release/component values produce the same DocIDs a real crawl does).
 	if idx.DocCount() == 0 {
 		if n, err := seed.LoadEmbedded(idx); err != nil {
 			log.Warn("seed load failed", "err", err.Error())
 		} else if n > 0 {
 			log.Info("seed corpus loaded", "records", n)
 		}
+	} else {
+		log.Info("index already populated; skipping seed", "docs", idx.DocCount())
 	}
 
 	// Crawler state file: /var/lib/pkgsvc/state.json.
@@ -91,6 +104,19 @@ func run() error {
 	if err != nil {
 		log.Warn("state.Open failed; starting fresh", "err", err.Error())
 		stateStore, _ = state.Open("")
+	}
+
+	// A rebuilt index and a populated state.json are contradictory: the shard
+	// hashes say "upstream unchanged since last crawl", but the index that
+	// crawl produced is gone. The orchestrator skips any shard whose hash still
+	// matches, so leaving them would strand an empty index. Drop them.
+	if idx.WasRebuilt() {
+		stateStore.Reset()
+		if err := stateStore.Save(); err != nil {
+			log.Warn("state reset save failed", "err", err.Error())
+		} else {
+			log.Info("crawler state reset after index rebuild")
+		}
 	}
 
 	// Assemble sources from the PKGSVC_SOURCES env spec:

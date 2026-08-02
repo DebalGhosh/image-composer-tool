@@ -151,7 +151,7 @@ func (s *Server) handlePackage(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCategories returns AppStream category facets with counts. Cheap
-// aggregation: scan the storeRecs mirror in the index. v2 could Bleve-
+// aggregation: Bleve facets over the categories keyword field. v2 could Bleve-
 // facet this properly.
 func (s *Server) handleCategories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{

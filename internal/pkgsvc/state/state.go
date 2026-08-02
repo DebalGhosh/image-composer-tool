@@ -32,11 +32,11 @@ type State struct {
 
 // Shard captures what we last saw for one suite × component × arch.
 type Shard struct {
-	LastRefreshUTC   time.Time         `json:"lastRefreshUtc"`
-	PackagesSHA256   string            `json:"packagesSha256"`
-	AppStreamSHA256  string            `json:"appstreamSha256,omitempty"`
-	PopconSHA256     string            `json:"popconSha256,omitempty"`
-	Docs             int               `json:"docs"`
+	LastRefreshUTC  time.Time `json:"lastRefreshUtc"`
+	PackagesSHA256  string    `json:"packagesSha256"`
+	AppStreamSHA256 string    `json:"appstreamSha256,omitempty"`
+	PopconSHA256    string    `json:"popconSha256,omitempty"`
+	Docs            int       `json:"docs"`
 	// Extra is a free-form bag for whatever the crawler wants to remember
 	// (dep11 build ids, popcon rotate dates, etc.). Kept as string→string
 	// so the schema stays trivially JSON-diffable.
@@ -94,6 +94,20 @@ func (s *Store) Put(key string, sh Shard) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.s.Shards[key] = sh
+}
+
+// Reset drops every shard entry, forcing the next refresh to re-fetch and
+// re-ingest all shards even though their upstream SHA256 is unchanged.
+//
+// Used when the Bleve index was rebuilt from scratch because its mapping
+// changed: the stored hashes describe what UPSTREAM looked like, not what the
+// index contains, so without this the orchestrator's "skip: hash unchanged"
+// branch would leave a freshly-emptied index permanently empty until upstream
+// happens to publish a new Packages file. Does NOT persist — call Save().
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.s.Shards = map[string]Shard{}
 }
 
 // Snapshot returns a shallow copy of the whole state (helpful for /health).
