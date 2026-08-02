@@ -78,6 +78,27 @@ func validateDispatchYAML(body string) error {
 // with or without a plural s, case-insensitively. \S already excludes \r.
 var artifactoryEcho = regexp.MustCompile(`(?i)Art[ei]facts?\s+published\s+to:\s+(https?://\S+)`)
 
+// artifactoryTarget catches artifactory-upload.sh's own directory echo:
+//
+//	==> Target:      https://af01p-png.devtools.intel.com/artifactory/…/
+//
+// Same URL as artifactoryEcho's, but printed before the uploads rather than
+// after them, so the UI's Artifactory link lands a minute or two sooner.
+var artifactoryTarget = regexp.MustCompile(`(?i)==>\s+Target:\s+(https?://\S+)`)
+
+// publishedFileEcho catches artifactory-upload.sh's per-file echo:
+//
+//	"  + minimal-desktop-ubuntu-24.04.raw.gz (3663831040 bytes, sha256=ab12…)"
+//
+// This is the ONLY place the image filename appears in a machine-readable
+// form — the pipeline archives just UPLOAD-MANIFEST.txt and the ICT log with
+// Jenkins, so the image itself is invisible to the artifacts REST API.
+//
+// Deliberately NOT ^-anchored: Jenkins' timestamps() prefixes every console
+// line with "[<ISO8601>] ". The 64-hex-digit sha256 group makes a false
+// positive implausible without the anchor.
+var publishedFileEcho = regexp.MustCompile(`\+\s+(\S+)\s+\((\d+)\s+bytes,\s+sha256=([0-9a-f]{64})\)`)
+
 // jenkinsClient is a thin HTTP client over the Jenkins REST API. All calls use
 // HTTP Basic auth with the configured user + API token.
 type jenkinsClient struct {
@@ -751,7 +772,7 @@ func (s *Server) runJenkinsBuild(ctx context.Context, b *build) {
 			nl := strings.LastIndexByte(str, '\n')
 			if nl >= 0 {
 				for _, line := range strings.Split(str[:nl], "\n") {
-					s.captureArtifactoryURL(b, line)
+					s.captureArtifactoryLines(b, line)
 					b.appendLog(line)
 				}
 				remainder := str[nl+1:]
@@ -763,7 +784,7 @@ func (s *Server) runJenkinsBuild(ctx context.Context, b *build) {
 		if !more {
 			if partial.Len() > 0 {
 				tail := partial.String()
-				s.captureArtifactoryURL(b, tail)
+				s.captureArtifactoryLines(b, tail)
 				b.appendLog(tail)
 				partial.Reset()
 			}
@@ -787,25 +808,55 @@ func (s *Server) runJenkinsBuild(ctx context.Context, b *build) {
 		return
 	}
 
-	// 4) Fetch artifacts.
-	jArts, err := s.jenkins.listArtifacts(ctx, buildURL)
-	if err != nil {
-		log.Warnf("build %s: artifact listing failed: %v", b.ID, err)
-		b.appendLog(fmt.Sprintf("[dispatcher] artifact listing failed: %v", err))
+	// 4) Resolve artifacts.
+	//
+	// Preferred shape: the ONE thing the operator came for — the disk image
+	// in Artifactory — composed from the PUBLISH stage's scraped directory +
+	// per-file echoes. The image is never a Jenkins artifact (the pipeline
+	// archives only UPLOAD-MANIFEST.txt and image-composer-tool.log), so
+	// without the scrape the table can't link it at all.
+	//
+	// The log tail has fully drained by now, so Published/ArtifactoryURL are
+	// stable; still read them under mu since captureArtifactoryLines writes
+	// them there.
+	b.mu.Lock()
+	artifactoryDir := b.Jenkins.ArtifactoryURL
+	published := make([]publishedFile, len(b.Jenkins.Published))
+	copy(published, b.Jenkins.Published)
+	b.mu.Unlock()
+
+	var arts []artifact
+	if img, ok := selectPublishedImage(published); ok {
+		if a, ok := artifactoryArtifact(artifactoryDir, img); ok {
+			arts = []artifact{a}
+			b.appendLog(fmt.Sprintf("[dispatcher] published image: %s", a.URL))
+		}
 	}
-	arts := make([]artifact, 0, len(jArts))
-	for _, a := range jArts {
-		arts = append(arts, artifact{
-			Name: a.FileName,
-			Type: classifyArtifact(a.FileName),
-			// Jenkins hosts the file directly. URL wins over Path in the UI.
-			// relativePath is raw in the JSON payload — per-segment PathEscape
-			// so filenames with spaces / '#' / '?' / '+' / unicode still work.
-			URL: buildURL + "artifact/" + encodeRelativePath(a.RelativePath),
-			// Path is the artifact's job-relative location (helpful info in
-			// the details panel; not a filesystem path on this host).
-			Path: a.RelativePath,
-		})
+
+	// Fallback: no scrapable upload (PUBLISH skipped, echo format changed, or
+	// the build died before Phase 6). List whatever Jenkins archived so the
+	// manifest + ICT log stay reachable — never a worse view than before.
+	if len(arts) == 0 {
+		jArts, err := s.jenkins.listArtifacts(ctx, buildURL)
+		if err != nil {
+			log.Warnf("build %s: artifact listing failed: %v", b.ID, err)
+			b.appendLog(fmt.Sprintf("[dispatcher] artifact listing failed: %v", err))
+		}
+		arts = make([]artifact, 0, len(jArts))
+		for _, a := range jArts {
+			arts = append(arts, artifact{
+				Name: a.FileName,
+				Type: classifyArtifact(a.FileName),
+				// Jenkins hosts the file directly. URL wins over Path in the UI.
+				// relativePath is raw in the JSON payload — per-segment PathEscape
+				// so filenames with spaces / '#' / '?' / '+' / unicode still work.
+				URL: buildURL + "artifact/" + encodeRelativePath(a.RelativePath),
+				// Path is the artifact's job-relative location (helpful info in
+				// the details panel; not a filesystem path on this host).
+				Path:   a.RelativePath,
+				Source: "jenkins",
+			})
+		}
 	}
 
 	// 5) Terminal state.
@@ -825,28 +876,95 @@ func (s *Server) runJenkinsBuild(ctx context.Context, b *build) {
 	}
 }
 
-// captureArtifactoryURL scans a single log line for the PUBLISH stage's
-// "Artefacts published to: <url>" echo and records the URL under mu so
-// the /details endpoint can surface it to the UI as a hyperlink.
-// Idempotent: only the first match is kept (subsequent lines that mention
-// the URL don't overwrite it).
-func (s *Server) captureArtifactoryURL(b *build, line string) {
+// captureArtifactoryLines scans a single log line for the PUBLISH stage's
+// Artifactory signals and records them under mu:
+//
+//   - the upload directory, from either artifactory-upload.sh's "==> Target:"
+//     echo or the pipeline's trailing "Artefacts published to:" echo. The
+//     first non-empty match wins, so it's idempotent and the earlier of the
+//     two lines is what the /details endpoint surfaces.
+//   - each uploaded file, from the "  + <name> (<n> bytes, sha256=…)" echoes.
+//     Appended in log order; the terminal handler picks the image out of them.
+func (s *Server) captureArtifactoryLines(b *build, line string) {
 	if b.Jenkins == nil {
 		return
 	}
-	// Cheap early-out: the marker string is unique, avoid regex on every
-	// line for the tens of thousands of unrelated lines a build produces.
-	if !strings.Contains(line, "published to:") {
+	// Cheap early-out: these markers are unique, so we avoid running three
+	// regexes over the tens of thousands of unrelated lines a build
+	// produces. Lowercased because the regexes are case-insensitive and the
+	// old case-sensitive guard would have rejected e.g. "Published To:".
+	lower := strings.ToLower(line)
+	hasDir := strings.Contains(lower, "published to:") || strings.Contains(lower, "==> target:")
+	hasFile := strings.Contains(lower, "sha256=")
+	if !hasDir && !hasFile {
 		return
 	}
-	m := artifactoryEcho.FindStringSubmatch(line)
-	if m == nil {
+
+	var dir string
+	if hasDir {
+		m := artifactoryEcho.FindStringSubmatch(line)
+		if m == nil {
+			m = artifactoryTarget.FindStringSubmatch(line)
+		}
+		if m != nil {
+			dir = m[1]
+		}
+	}
+	var pf *publishedFile
+	if hasFile {
+		if m := publishedFileEcho.FindStringSubmatch(line); m != nil {
+			// The regex's \d+ guarantees ParseInt only fails on
+			// overflow, which no real artifact can reach.
+			size, err := strconv.ParseInt(m[2], 10, 64)
+			if err == nil {
+				pf = &publishedFile{Name: m[1], Size: size, SHA256: m[3]}
+			}
+		}
+	}
+	if dir == "" && pf == nil {
 		return
 	}
+
 	b.mu.Lock()
-	if b.Jenkins.ArtifactoryURL == "" {
-		b.Jenkins.ArtifactoryURL = m[1]
+	if dir != "" && b.Jenkins.ArtifactoryURL == "" {
+		b.Jenkins.ArtifactoryURL = dir
+	}
+	if pf != nil {
+		b.Jenkins.Published = append(b.Jenkins.Published, *pf)
 	}
 	b.mu.Unlock()
 }
 
+// artifactoryArtifact composes the single "the image is right here" artifact
+// from the scraped directory URL and the chosen image file. Returns ok=false
+// when either input is missing, so the caller can fall back to the
+// Jenkins-archived listing.
+//
+// dir is the directory echo verbatim, e.g.
+//
+//	https://af01p-png.devtools.intel.com/artifactory/core-os-yocto-png-local/worker-03/20260802-1750/
+//
+// and the result URL appends the percent-escaped filename to it. Path is the
+// repo-relative portion (everything after "/artifactory/"), which is what an
+// operator pastes into a jf/curl command; if the URL doesn't carry that segment
+// (a differently-configured Artifactory) Path falls back to the full URL, which
+// is still useful to copy.
+func artifactoryArtifact(dir string, img publishedFile) (artifact, bool) {
+	if dir == "" || img.Name == "" {
+		return artifact{}, false
+	}
+	fileURL := strings.TrimRight(dir, "/") + "/" + url.PathEscape(img.Name)
+	repoPath := fileURL
+	const marker = "/artifactory/"
+	if i := strings.Index(fileURL, marker); i >= 0 {
+		repoPath = fileURL[i+len(marker):]
+	}
+	return artifact{
+		Name:   img.Name,
+		Type:   classifyArtifact(img.Name),
+		Path:   repoPath,
+		URL:    fileURL,
+		Source: "artifactory",
+		Size:   img.Size,
+	}, true
+}

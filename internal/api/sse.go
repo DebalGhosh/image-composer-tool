@@ -54,9 +54,9 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		lastPhase, lastInstallDone, lastInstallTotal = ph, done, total
 		sendEvent(w, "phase", map[string]any{
-			"phase":         ph,
-			"installDone":   done,
-			"installTotal":  total,
+			"phase":        ph,
+			"installDone":  done,
+			"installTotal": total,
 		})
 	}
 
@@ -97,13 +97,16 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 				if arts == nil {
 					arts = []artifact{}
 				}
-				// One authoritative "done" phase transition so the
-				// stepper's last step lights up even if the log
-				// substring markers didn't reach it (e.g. a template
-				// whose upload path doesn't emit an "Uploading to
-				// Artifactory" line).
+				// The ONLY "done" phase transition. detectPhase
+				// deliberately has no phaseDone markers (see
+				// phases.go), because every candidate log line is
+				// emitted before the Artifactory upload finishes.
+				// Reaching here means Jenkins reported SUCCESS and
+				// `arts` is resolved, so the stepper's last step
+				// lights up in the same flush as the `complete`
+				// event that carries the artifact links.
 				sendEvent(w, "phase", map[string]any{
-					"phase":        "done",
+					"phase":        phaseNames[phaseDone],
 					"installDone":  lastInstallDone,
 					"installTotal": lastInstallTotal,
 				})

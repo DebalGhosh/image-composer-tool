@@ -66,6 +66,21 @@ var phaseNames = map[buildPhase]string{
 // to Artifactory (typically 1–2 minutes for our images). Without this phase
 // the stepper jumps from "Generating" straight to "Done" while the user is
 // still watching the log scroll past the upload.
+//
+// phaseDone has NO markers, deliberately. It is emitted solely by the SSE
+// handler's terminal branch (sse.go), which fires only once Jenkins reported
+// SUCCESS and the artifacts have been resolved — so "Done" means the whole job
+// concluded AND the artifact links are on their way to the browser in the same
+// flush. The obvious candidate marker, ICT's own
+// "image build completed successfully" (cmd/image-composer-tool/build.go), is
+// logged INSIDE the ephemeral container, which then exits before
+// stage-artefacts and the Artifactory upload even start; since detectPhase
+// takes the max phase reached and never regresses, latching on it would skip
+// the publishing markers entirely and green "Publishing artifacts" while the
+// upload is still streaming. Worse, three sub-stage logs contain that same
+// substring case-insensitively (rawmaker/initrdmaker/isomaker "… image build
+// completed successfully: %s"), and rawmaker logs it BEFORE image conversion
+// and compression — so a marker would have latched mid-generating.
 var phaseMarkers = []struct {
 	phase   buildPhase
 	substrs []string
@@ -112,17 +127,27 @@ var phaseMarkers = []struct {
 		"[entrypoint] stage=stage-artefacts",
 		"[entrypoint] stage=handoff",
 		"[pipeline] { (publish)",
-		"uploading to artifactory",
+		// artifactory-upload.sh's own progress echoes. The previous
+		// marker here ("uploading to artifactory") had no producer
+		// anywhere in the farm — these two are the real lines:
+		//   ==> Publishing 7 file(s) from /…/upload
+		//   Artefacts published to: https://af01p-png.…/artifactory/…/
+		// Jenkins' timestamps() prefixes every line, which is harmless
+		// to the substring match.
+		"==> publishing ",
+		"artefacts published to:",
 	}},
-	{phaseDone, []string{
-		"image build completed successfully",
-	}},
+	// No phaseDone entry — see the comment above. "done" comes only from
+	// the SSE terminal branch.
 }
 
 // detectPhase returns the id of the furthest phase reached across all log
 // lines. Defaults to "dispatching" before any marker appears — that's the
 // state during the initial Jenkins queue wait, before even the first
 // dispatcher log line has fired.
+//
+// Never returns "done": phaseDone carries no markers, so the log-derived
+// ceiling is "publishing". The terminal transition is the SSE handler's job.
 func detectPhase(logs []string) string {
 	reached := phaseDispatching
 	for _, line := range logs {

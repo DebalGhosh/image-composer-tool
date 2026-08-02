@@ -92,14 +92,45 @@ func TestDetectPhase(t *testing.T) {
 			want: "publishing",
 		},
 		{
-			name: "done marker overrides all preceding stages",
+			// Regression guard for the early-conclusion bug. ICT logs
+			// "image build completed successfully" (cmd/image-composer-tool/
+			// build.go) INSIDE the ephemeral container, which then exits
+			// before the Artifactory upload has even started. It must not
+			// conclude the stepper — "done" is the SSE handler's call alone.
+			name: "container completion line does NOT conclude the stepper",
 			logs: []string{
 				"Installing package 270/270: dracut-core",
 				"Configuring UKI",
 				"[entrypoint] stage=handoff",
 				"image build completed successfully",
 			},
-			want: "done",
+			want: "publishing",
+		},
+		{
+			// internal/image/rawmaker/rawmaker.go logs this BEFORE image
+			// conversion and compression, so treating it as terminal would
+			// have greened the whole stepper mid-generating.
+			name: "raw image completion mid-generating stays generating",
+			logs: []string{
+				"Installing package 270/270: dracut-core",
+				"Configuring UKI",
+				"INFO    manifest/manifest.go    Successfully copied SBOM",
+				"INFO    rawmaker/rawmaker.go    Raw image build completed successfully: /workspace/minimal-desktop.raw",
+			},
+			want: "generating",
+		},
+		{
+			// artifactory-upload.sh + ictBuild.groovy echoes, verbatim and
+			// with Jenkins' timestamps() prefix, which the substring match
+			// must tolerate.
+			name: "artifactory upload lines reach publishing",
+			logs: []string{
+				"INFO    manifest/manifest.go    Successfully copied SBOM",
+				"image build completed successfully",
+				"==> Publishing 7 file(s) from /home/jenkins/workspace/worker-03/upload",
+				"[2026-08-02T17:52:11.402Z] Artefacts published to: https://af01p-png.devtools.intel.com/artifactory/core-os-yocto-png-local/worker-03/20260802-1750/",
+			},
+			want: "publishing",
 		},
 	}
 
