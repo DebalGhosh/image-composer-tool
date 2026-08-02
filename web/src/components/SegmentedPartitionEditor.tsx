@@ -1172,8 +1172,16 @@ function PartitionRow({
         </div>
       </div>
 
-      {/* Main grid: size slider | fsType | mountPoint | flags */}
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+      {/* Main grid: size slider | fsType | mountPoint | flags.
+       *
+       * Widest-first with container queries. The viewport-keyed version this
+       * replaces (2 columns at the `md` breakpoint, 4 at `lg`) was the worst
+       * offender in the app: those fire on the VIEWPORT, so at 1280px with
+       * this pane at its minSize={35} it forced four ~69px columns — each
+       * holding a Combobox whose px-3 chrome plus caret is already 48px.
+       * Unreadable, not merely truncated. These thresholds measure the
+       * partition row itself. */}
+      <div className="@max-pane-4col:grid-cols-2 @max-pane-2col:grid-cols-1 grid grid-cols-4 gap-3">
         {/* Size slider */}
         <div>
           <label
@@ -1308,7 +1316,7 @@ function PartitionRow({
       </div>
 
       <Collapsible open={expanded} className="mt-3">
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="@max-pane-2col:grid-cols-1 grid grid-cols-3 gap-3">
           <div>
             <label className={fieldLabelClass} style={fieldLabelStyle}>
               Filesystem label
@@ -1340,8 +1348,13 @@ function PartitionRow({
                 (derived)
               </span>
             </label>
+            {/* break-all because a GPT type UUID is 36 unbroken chars and CSS
+             * only breaks after its hyphens — in a third-of-a-pane column
+             * that's still wider than the box. title so the full value stays
+             * readable and selectable when it wraps to three lines. */}
             <div
-              className="rounded-md border px-3 py-2.5 font-mono text-[11px]"
+              className="rounded-md border px-3 py-2.5 font-mono text-[11px] break-all"
+              title={partition.typeUUID ?? undefined}
               style={{
                 background: 'var(--input-background)',
                 borderColor: 'var(--border-color)',

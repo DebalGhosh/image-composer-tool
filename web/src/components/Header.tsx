@@ -64,7 +64,15 @@ export function Header({
 
   return (
     <header
-      className="sticky top-0 z-40 flex items-center gap-6 border-b px-6 py-3"
+      /* Every child is shrink-0 and the title is whitespace-nowrap, so this
+       * row is structurally unable to wrap to a second line. That matters
+       * more than it looks: --header-h is a fixed 57px that four page shells
+       * subtract from 100dvh, so a header that grew to two lines would make
+       * all four overshoot, start the document scrolling, and push every
+       * action footer below the fold. gap-4 (not gap-6) because with four
+       * tabs plus a build indicator the gaps are the dominant term in the
+       * minimum content width — this alone buys ~16px. */
+      className="sticky top-0 z-40 flex items-center gap-4 border-b px-6 py-3"
       style={{
         /* Always-dark charcoal strip — matches SSF-UI's --navbar-bg-color
          * (#242528). Same in both themes so the white title reads cleanly
@@ -73,16 +81,22 @@ export function Header({
         borderColor: 'rgba(255,255,255,0.08)',
       }}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <img src="/intel-logo.svg" alt="" className="h-7 w-auto" aria-hidden="true" />
-        <span className="text-lg font-bold tracking-tight text-white">
+        {/* whitespace-nowrap, not truncate: with everything else in this row
+         * shrink-0 and the BuildIndicator label hidden below 1440px, the
+         * minimum content width is ~715px, so the title never needs to
+         * elide at the supported 1280px floor. */}
+        <span className="text-lg font-bold tracking-tight whitespace-nowrap text-white">
           Image Composer Tool
         </span>
       </div>
 
       <nav
         ref={navRef}
-        className="relative flex items-center gap-1"
+        /* shrink-0: a squeezed nav would also mis-position the sliding
+         * underline, which is driven by getBoundingClientRect. */
+        className="relative flex shrink-0 items-center gap-1"
         aria-label="Primary"
       >
         {tabs.map((t) => {
@@ -107,7 +121,13 @@ export function Header({
             </button>
           )
         })}
-        {/* Single sliding underline. left / width transition on view change. */}
+        {/* Single sliding underline. left / width transition on view change.
+         *
+         * -bottom-[13px] is measured from the NAV's own box, not the header's,
+         * so it survives --header-h changes — but it encodes the same two
+         * numbers: the header's py-3 bottom padding (12px) + border-b (1px).
+         * The 3px bar therefore lands exactly on the header's bottom border.
+         * Re-check it if either of those changes. */}
         {indicator && (
           <span
             aria-hidden="true"
@@ -122,7 +142,7 @@ export function Header({
         )}
       </nav>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <BuildIndicator status={buildStatus} onClick={onBuildIndicatorClick} />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
@@ -159,7 +179,11 @@ function BuildIndicator({
         )}
         <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${cfg.color}`} />
       </span>
-      {cfg.label}
+      {/* Below 1440px the label is the widest optional thing in the header
+       * (~130px), and it's redundant with both the colour-coded dot and the
+       * button's title. sr-only rather than hidden so screen readers still
+       * announce build state, and the dot + click target stay put. */}
+      <span className="max-[1440px]:sr-only">{cfg.label}</span>
     </button>
   )
 }

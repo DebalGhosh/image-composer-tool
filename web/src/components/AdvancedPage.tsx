@@ -172,7 +172,7 @@ export function AdvancedPage({ onBuildStarted }: AdvancedPageProps) {
   }
 
   return (
-    <div className="advanced-page-shell">
+    <div className="page-shell">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl p-6">
       <h1 className="mb-1 text-2xl font-bold" style={{ color: 'var(--title-text)' }}>
@@ -378,22 +378,6 @@ export function AdvancedPage({ onBuildStarted }: AdvancedPageProps) {
           )}
         </div>
       </footer>
-
-      <style>{`
-        .advanced-page-shell {
-          height: calc(100vh - 3.75rem);
-          min-height: 0;
-          display: flex;
-          flex-direction: column;
-        }
-        .action-footer {
-          flex: none;
-          border-top: 1px solid var(--border-color);
-          background: color-mix(in srgb, var(--section-background) 92%, transparent);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-        }
-      `}</style>
     </div>
   )
 }

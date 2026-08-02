@@ -27,6 +27,52 @@
 
   --font-sans: 'Manrope', 'IntelOneDisplay', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'Intel One Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  /* ---------------------------------------------------------------------
+   * Container-query thresholds, for content that lives inside a resizable
+   * pane. These feed Tailwind's `@min-pane-2col:` / `@max-pane-2col:`
+   * variants (the `--container-*` namespace), which measure the nearest
+   * `@container` ancestor instead of the viewport.
+   *
+   * Why not sm:/md:/lg:? Those are viewport-relative, but nearly all our
+   * content sits in react-resizable-panels panes whose width is
+   * `viewport x userDraggedFraction`. Inside a 55% pane, `md:` fires on a box
+   * roughly half the width it was reasoning about — and the failure is worse
+   * than imprecise, it's INVERTED: InteractivePage's 2-col grid gets 229px
+   * per column at a 1024px viewport (md: on) but 334px at 767px (md: off),
+   * so the grid is tightest immediately before the breakpoint disables it.
+   * BasicPage already documents this trap where it declines a 2-col variant.
+   *
+   * MEASURED BOX: one `@container` per PANE, high in the tree, never on
+   * individual cards or rows. That placement is a correctness requirement,
+   * not tidiness — `container-type: inline-size` implies `contain: layout`,
+   * which creates a stacking context, and a stacking context is painted as
+   * one atomic unit in the normal-flow layer. Mark a card body and its open
+   * Combobox dropdown (z-30) gets painted INSIDE that unit, so the next
+   * sibling card's opaque --section-background paints over it. One container
+   * per pane keeps every card and dropdown in the same stacking context, so
+   * all internal layering is unchanged.
+   *
+   * The cost of that choice is that the container is the pane, while the
+   * grid is inset by the pane gutter + card padding (~42px for a card grid,
+   * ~74px once a partition row's own p-4 is added). The values below already
+   * include that inset, which is why they're larger than the bare
+   * column-count arithmetic would suggest:
+   *
+   *   2col 34rem/544px — a 2-col grid at this container width gives ~280-338px
+   *                      per column, comfortably above a Combobox's usable
+   *                      min-content (px-3 chrome + caret is already ~48px).
+   *                      Below it, one column reads better than two cramped.
+   *   4col 50rem/800px — four columns need ~170px each plus gap-3; at this
+   *                      width a partition row's grid resolves to ~222px per
+   *                      column. Below it, fall back to two.
+   *
+   * Sanity check at the supported floor: 1280px viewport, left pane dragged
+   * to its minSize={35} → container ~390px → single column at 348px wide.
+   * The viewport-keyed version this replaces gave four ~69px columns there.
+   * ------------------------------------------------------------------- */
+  --container-pane-2col: 34rem;
+  --container-pane-4col: 50rem;
 }
 
 /* CSS custom properties driven by the .dark class. */
@@ -60,7 +106,58 @@
 
   --options-shadow: 0px 1px 4px 0px rgba(4, 4, 4, 0.2);
 
+  /* -----------------------------------------------------------------------
+   * Header height — ONE source of truth.
+   *
+   * Measured, not guessed: Header's py-3 (12 + 12) + its tallest child
+   * (ThemeToggle h-8 = 32px; the h-7 logo and the text-lg title are both
+   * shorter) + border-b 1px = 57px. The four page shells each hardcoded
+   * 3.75rem (60px), leaving a 3px dead strip on every tab.
+   *
+   * Changing Header's py-3 or the toggle's h-8 means re-measuring this AND
+   * re-checking Header.tsx's -bottom-[13px] tab-underline offset (that one
+   * is measured from the nav's own box, so it survives this refactor, but
+   * it depends on the same two numbers).
+   * --------------------------------------------------------------------- */
+  --header-h: 57px;
+
+  /* -----------------------------------------------------------------------
+   * Density tier. Consumed as Tailwind arbitrary values — p-[var(--pad-page)]
+   * etc. — so the single @media below re-points every call site at once.
+   *
+   * Spacing, deliberately NOT type: the type scale has no headroom left
+   * (text-[11px] appears ~28x and is already at the accessibility floor).
+   * All the slack on a short screen is in padding.
+   * --------------------------------------------------------------------- */
+  --pad-page: 1.5rem; /* p-6    page-shell gutter */
+  --pad-card: 1.25rem; /* p-5    Card body */
+  --pad-card-y: 0.875rem; /* py-3.5 Card header */
+  --pad-footer-y: 0.75rem; /* py-3   action footer */
+  --h1-size: 1.5rem; /* text-2xl page headings */
+  --term-min-h: 26rem; /* build-log floor; see BuildView */
+
   color-scheme: light;
+}
+
+/* Compact density tier.
+ *
+ * Height-keyed, not width-keyed: what actually runs out at 1366x768 is
+ * vertical room, and a 1280-wide window on a 1080-tall monitor is not
+ * cramped. 800px is the cut so 1280x720 and 1366x768 get the compact
+ * spacing while 1440x900 and 1920x1080 keep the roomy defaults.
+ *
+ * Consequence worth knowing: a short-but-wide display (2560x800) also gets
+ * the compact tier. That's intended — "leave wide screens alone" means add
+ * no width-driven behaviour above 1920px, not ignore short viewports. */
+@media (max-height: 800px) {
+  :root {
+    --pad-page: 1rem;
+    --pad-card: 0.875rem;
+    --pad-card-y: 0.625rem;
+    --pad-footer-y: 0.5rem;
+    --h1-size: 1.25rem;
+    --term-min-h: 18rem;
+  }
 }
 
 .dark {
@@ -155,6 +252,69 @@ h1,
 h2,
 h3 {
   letter-spacing: -0.011em;
+}
+
+/* -------------------------------------------------------------------------
+ * Page shell / action footer / resize handle.
+ *
+ * These four rule sets used to be duplicated verbatim in an inline <style>
+ * block on each of BasicPage, InteractivePage, AdvancedPage and
+ * BuildImagePage — four copies of the same declarations differing only in the
+ * shell class name, which is how `calc(100vh - 3.75rem)` came to encode a
+ * stale 60px header height in four places at once. One copy here instead.
+ * ------------------------------------------------------------------------- */
+
+/* Fills the window below the header. dvh over vh so device-emulation and any
+ * future dynamic browser chrome behave; on desktop the two are identical. */
+.page-shell {
+  height: calc(100dvh - var(--header-h));
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sticky action bar at the bottom of a page shell. `flex: none` means it
+ * never yields space to the scrolling content above it — which is also why
+ * its contents need flex-wrap (a non-wrapping row pushes the primary button
+ * out of the pane instead of moving it to a second line). */
+.action-footer {
+  flex: none;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--section-background) 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* react-resizable-panels drag handle: an 8px transparent strip that tints on
+ * hover/active, with a centred grip that grows 40 -> 60px. */
+.resize-handle {
+  position: relative;
+  width: 8px;
+  background: transparent;
+  transition: background-color 160ms ease;
+  cursor: col-resize;
+}
+.resize-handle:hover,
+.resize-handle[data-panel-resize-handle-active] {
+  background: color-mix(in srgb, var(--classic-blue) 25%, transparent);
+}
+.resize-grip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 40px;
+  border-radius: 1px;
+  background: var(--border-color);
+  transition:
+    background-color 160ms ease,
+    height 160ms ease;
+}
+.resize-handle:hover .resize-grip,
+.resize-handle[data-panel-resize-handle-active] .resize-grip {
+  background: var(--classic-blue);
+  height: 60px;
 }
 
 /* Fullscreen terminal host. When the browser promotes this element into the

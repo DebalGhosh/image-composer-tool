@@ -515,7 +515,7 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
     draft.imageName.length > 0 && !IMAGE_NAME_RE.test(draft.imageName)
 
   return (
-    <div className="interactive-page-shell" ref={rootRef}>
+    <div className="page-shell" ref={rootRef}>
       {/*
        * Wrap the PanelGroup in a `relative` container so we can absolutely
        * position the collapse-preview chevron button over the resize
@@ -538,7 +538,27 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
            * the container's true top edge and sticky headers pin
            * flush against the pane's visible top.
            */}
-          <div className="h-full overflow-y-auto">
+          {/* @container makes this pane the reference box for every
+           * `@max-pane-*` / `@min-pane-*` utility below it, so the form grids
+           * respond to the width the user dragged rather than the window's.
+           *
+           * It lives HERE, once per pane, and deliberately not on individual
+           * Cards or partition rows. `container-type: inline-size` implies
+           * `contain: layout`, which creates a stacking context — and a
+           * stacking context paints atomically. On a card body that would
+           * confine an open Combobox dropdown (z-30) inside the card, letting
+           * the next sibling card's opaque background paint over it. One
+           * container per pane keeps every card and dropdown in the SAME
+           * stacking context, so nothing about their layering changes.
+           *
+           * Also safe here for the position:fixed hazard: layout containment
+           * makes this a containing block for fixed descendants, but this
+           * pane holds no fixed-position UI — the YAML preview (and its
+           * fullscreen-capable YamlEditor) is in the OTHER pane, and the
+           * PackageSearchDialog renders outside the PanelGroup entirely.
+           * That is exactly why AdvancedPage, whose editor sits in the
+           * scrolling flow, gets no marker at all. */}
+          <div className="@container h-full overflow-y-auto">
             <div className="px-6 pt-6 pb-6">
             <h1
               className="mb-1 text-2xl font-bold"
@@ -715,8 +735,14 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
               collapsible
               className="mb-4"
             >
-              {/* Row 1: OS + Distribution — dropdowns, gated cascade */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {/* Row 1: OS + Distribution — dropdowns, gated cascade.
+               *
+               * Container query, not md:. This lives inside a resizable pane
+               * whose width is viewport x userDraggedFraction, so md: would
+               * measure the wrong box — and get it backwards: two columns are
+               * NARROWER at a 1024px viewport (md: on, 229px each) than at
+               * 767px (md: off, 334px). @max-pane-2col measures the Card. */}
+              <div className="@max-pane-2col:grid-cols-1 grid grid-cols-2 gap-4">
                 <div>
                   <label
                     id="i-os-label"
@@ -777,7 +803,7 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
               {/* Row 2: Architecture + Image type — segmented pills, same
                *  visual weight, side-by-side for balance. Each Segmented
                *  wraps internally on narrow columns so no chip clips. */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="@max-pane-2col:grid-cols-1 grid grid-cols-2 gap-4">
                 <Segmented
                   label="Architecture"
                   value={draft.target.arch}
@@ -1207,49 +1233,6 @@ export function InteractivePage({ onBuildStarted }: InteractivePageProps) {
         os={draft.target.dist}
         arch={draft.target.arch}
       />
-
-      <style>{`
-        .interactive-page-shell {
-          height: calc(100vh - 3.75rem);
-          min-height: 0;
-          display: flex;
-          flex-direction: column;
-        }
-        .action-footer {
-          flex: none;
-          border-top: 1px solid var(--border-color);
-          background: color-mix(in srgb, var(--section-background) 92%, transparent);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-        }
-        .resize-handle {
-          position: relative;
-          width: 8px;
-          background: transparent;
-          transition: background-color 160ms ease;
-          cursor: col-resize;
-        }
-        .resize-handle:hover,
-        .resize-handle[data-panel-resize-handle-active] {
-          background: color-mix(in srgb, var(--classic-blue) 25%, transparent);
-        }
-        .resize-grip {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          transform: translate(-50%, -50%);
-          width: 2px;
-          height: 40px;
-          border-radius: 1px;
-          background: var(--border-color);
-          transition: background-color 160ms ease, height 160ms ease;
-        }
-        .resize-handle:hover .resize-grip,
-        .resize-handle[data-panel-resize-handle-active] .resize-grip {
-          background: var(--classic-blue);
-          height: 60px;
-        }
-      `}</style>
     </div>
   )
 }
@@ -1478,7 +1461,7 @@ function UserBlock({
       </label>
       <Collapsible open={enabled} className="mt-3">
         <div
-          className="grid gap-4 rounded-md border p-4 md:grid-cols-2"
+          className="@max-pane-2col:grid-cols-1 grid grid-cols-2 gap-4 rounded-md border p-4"
           style={{
             borderColor: 'var(--border-color)',
             background: 'var(--input-background)',
@@ -1587,7 +1570,7 @@ function UserBlock({
             />
           </div>
           <label
-            className="flex cursor-pointer items-center gap-3 text-sm md:col-span-2"
+            className="@max-pane-2col:col-span-1 col-span-2 flex cursor-pointer items-center gap-3 text-sm"
             style={{ color: 'var(--font-color)' }}
           >
             <input

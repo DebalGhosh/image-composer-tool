@@ -12,10 +12,34 @@ import { Select } from './Select'
 import { Card } from './Card'
 import { LiveYamlPreview } from './LiveYamlPreview'
 import { SummaryPanel } from './SummaryPanel'
-import { Collapsible } from './Collapsible'
+import { DialogOverlay } from './DialogOverlay'
+import { useYamlFullscreenActive } from './YamlEditor'
 
 interface BasicPageProps {
   onBuildStarted: (buildId: string, yaml?: string) => void
+}
+
+/**
+ * Hamburger glyph for the template-YAML drawer trigger. Inline SVG with
+ * `currentColor` per the existing icon convention in this codebase
+ * (YamlEditor's ExpandIcon/CollapseIcon, Card's Chevron) — no icon
+ * dependency.
+ */
+function MenuIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M2 4h12M2 8h12M2 12h12" />
+    </svg>
+  )
 }
 
 export function BasicPage({ onBuildStarted }: BasicPageProps) {
@@ -25,16 +49,22 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
   const toast = useToast()
 
   const [review, setReview] = useState<ComposeResponse | null>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
+  // Separate from `busy` on purpose. `busy` gates the Build Image button;
+  // the review now re-resolves on every cascade edit, and sharing the flag
+  // would blink that button disabled on each keystroke.
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewError, setReviewError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  // One-shot latch: as soon as the cascade first reaches `complete`, we
-  // auto-open the review card so the user doesn't have to hunt for the
-  // checkbox. On subsequent edits — even if they re-complete the cascade
-  // — we respect whatever the user's last explicit toggle was. The latch
-  // is component-lifetime only (no localStorage), because BuildImagePage
-  // remounts BasicPage on tab return and a fresh visit deserves a fresh
-  // auto-reveal.
-  const autoOpenedRef = useRef(false)
+  // Whether the template-YAML drawer is open.
+  const [yamlOpen, setYamlOpen] = useState(false)
+  // True while a YamlEditor (the one inside the drawer) owns fullscreen —
+  // used to hand Escape to it instead of closing the drawer out from under.
+  const yamlFullscreen = useYamlFullscreenActive()
+
+  // Latest selection, read at request-fire time inside the debounced
+  // effect rather than captured in its closure.
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
 
   const opts = useMemo(
     () => (manifest ? cascadingOptions(manifest, selection) : null),
@@ -169,77 +199,87 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
   }, [complete])
 
   /*
-   * Auto-open the review card the FIRST time the cascade reaches a
-   * complete selection. After the initial reveal we defer entirely to
-   * whatever the user's last click was — if they close it, we don't
-   * re-open on re-completion (nagging); if they leave it open, edits
-   * that break-then-fix the cascade still work the same as before.
+   * Live review resolution.
+   *
+   * The review summary now lives in the right pane, which slides open on
+   * its own the moment the cascade completes — there is no longer a
+   * checkbox to (re-)trigger a fetch. So this resolves on EVERY complete
+   * selection rather than latching once: debounced + abortable, mirroring
+   * LiveYamlPreview.tsx:43-99 so the two panes stay in step and issue at
+   * most one request each per settled selection.
    *
    * Placed BEFORE the loading early-return so hook order stays
    * unconditional across renders (Rules of Hooks).
    *
-   * Two subtleties addressed in this handler:
-   *
-   *   1. Cancellation: a `cancelled` flag flipped by the effect's
-   *      cleanup ensures that if the user edits a field while the
-   *      compose() fetch is in flight (breaking the cascade,
-   *      changing the vertical, or manually closing the review),
-   *      the stale response is dropped instead of resurrecting a
-   *      review card the user has already dismissed.
-   *
-   *   2. Latch timing: autoOpenedRef flips to true ONLY after the
-   *      fetch resolves successfully AND is still current. A
-   *      transient network failure on the first attempt used to
-   *      permanently kill auto-reveal for the session; now it
-   *      leaves the latch open so the next re-completion still
-   *      gets a chance.
+   * Errors render inline in the pane instead of raising a toast. Same
+   * reasoning LiveYamlPreview documents at :76-81 — compose can fail on
+   * any intermediate cascade state, and a toast per keystroke is noise.
+   * The toast stays reserved for the dispatch path below.
    */
   useEffect(() => {
-    if (!complete || autoOpenedRef.current || !manifest) return
-    let cancelled = false
-    ;(async () => {
+    if (!complete || !manifest) {
+      setReview(null)
+      setReviewError(null)
+      setReviewLoading(false)
+      return
+    }
+
+    // Flip the spinner on immediately rather than inside the timeout, so the
+    // pane reads "Resolving…" for the debounce window instead of sitting
+    // blank (setSel has just cleared the previous summary).
+    setReviewLoading(true)
+    setReviewError(null)
+
+    // Declared out here so the cleanup below can abort a request this run
+    // started. React always runs the previous effect's cleanup before the
+    // next effect body, so that covers supersession AND unmount — no
+    // separate module/ref bookkeeping needed.
+    let ac: AbortController | null = null
+
+    const t = setTimeout(async () => {
+      ac = new AbortController()
+      const signal = ac.signal
       try {
-        setBusy(true)
-        const r = await api.compose(selection)
-        if (cancelled) return
-        autoOpenedRef.current = true
+        // Read the selection at request-fire time rather than from this
+        // closure, so a rapid cascade edit resolves the newest tuple.
+        const r = await api.compose(selectionRef.current)
+        if (signal.aborted) return
         setReview(r)
-        setReviewOpen(true)
       } catch (e) {
-        if (cancelled) return
-        toast.danger((e as Error).message, { title: 'Review failed' })
+        if (signal.aborted) return
+        setReview(null)
+        setReviewError((e as Error).message)
       } finally {
-        if (!cancelled) setBusy(false)
+        // Left true when aborted: a newer run owns the flag and is already
+        // resolving, so clearing it here would blink the spinner off.
+        if (!signal.aborted) setReviewLoading(false)
       }
-    })()
+    }, 200) // Same 200ms beat as LiveYamlPreview.
+
     return () => {
-      cancelled = true
+      clearTimeout(t)
+      ac?.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    complete,
+    manifest,
+    selection.vertical,
+    selection.sku,
+    selection.platform,
+    selection.os,
+    selection.kernel,
+    selection.imageType,
+  ])
+
+  // An incomplete cascade has no YAML to show, so never leave the drawer
+  // stranded over an empty preview if the user edits a field via keyboard
+  // while it's open.
+  useEffect(() => {
+    if (!complete) setYamlOpen(false)
   }, [complete])
 
   if (!manifest || !opts) return <div className="p-8">Loading…</div>
-
-  const openReview = async () => {
-    if (!complete) return
-    try {
-      setBusy(true)
-      setReview(await api.compose(selection))
-      setReviewOpen(true)
-    } catch (e) {
-      toast.danger((e as Error).message, { title: 'Review failed' })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onToggleReview = async () => {
-    if (reviewOpen) {
-      setReviewOpen(false)
-      return
-    }
-    await openReview()
-  }
 
   const onBuild = async () => {
     if (!complete) return
@@ -260,11 +300,13 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
     }
   }
 
-  // Changing any field invalidates a prior review.
+  // Changing any field invalidates a prior review. Clearing it here (rather
+  // than only in the effect) means the pane blanks the instant the user
+  // edits, instead of showing a stale summary for the debounce window.
   const setSel = (k: Parameters<typeof setField>[0], v: string) => {
     setField(k, v)
-    setReviewOpen(false)
     setReview(null)
+    setReviewError(null)
   }
 
   /* Two-pane layout: form on the left, live YAML preview on the right.
@@ -272,7 +314,7 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
    * so the panels resize the full viewport and each pane scrolls
    * independently. */
   return (
-    <div className="basic-page-shell">
+    <div className="page-shell">
       <PanelGroup direction="horizontal" className="min-h-0 flex-1">
         <Panel
           /* No fixed defaultSize on the left — the browser will fill it as
@@ -344,31 +386,136 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
                 disabled={!selection.os || (opts.kernels.length > 0 && !selection.kernel)}
                 onChange={(v) => setSel('imageType', v)}
               />
-
-              <label
-                className="mt-2 flex cursor-pointer items-center gap-3 text-sm"
-                style={{ color: 'var(--font-color)' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={reviewOpen}
-                  disabled={!complete}
-                  onChange={onToggleReview}
-                  /* h-4 w-4 (~16px) bumps the native tick above the ~13px
-                     default so the check itself gets more visual padding
-                     inside the box. accent-color paints the tick in Intel
-                     blue in browsers that support it (Chrome 93+, Firefox 92+,
-                     Safari 15.4+). */
-                  className="h-4 w-4 accent-[var(--classic-blue)] cursor-pointer disabled:cursor-not-allowed"
-                />
-                Review Image Configuration
-              </label>
             </Card>
+          </div>
+        </Panel>
 
-            <Collapsible open={reviewOpen && !!review} className="mt-5">
-              {review && (
-                <Card title="Image Configuration Review">
-                  <div className="mt-3 grid grid-cols-1 gap-3 text-sm xl:grid-cols-2">
+        <PanelResizeHandle
+          className="resize-handle group"
+          /* When the preview is collapsed the handle would be a stray 8-px
+             vertical strip against the right edge of the form — hide it. */
+          style={{ display: complete ? 'block' : 'none' }}
+        >
+          <div className="resize-grip" aria-hidden />
+        </PanelResizeHandle>
+
+        <Panel
+          ref={rightPanelRef}
+          defaultSize={complete ? 45 : 0}
+          minSize={0}
+        >
+          {/* Everything except the header row lives inside a fader so the
+              content doesn't flash while the pane is still a sliver mid
+              animation. */}
+          {/* @container: reference box for the SummaryPanel key column's
+           * `@max-pane-2col:w-20`. Safe as a stacking context / fixed
+           * containing block — this pane renders summary tables only; the
+           * YAML drawer (and the fullscreen-capable YamlEditor inside it)
+           * mounts from DialogOverlay outside the PanelGroup. */}
+          <div className="@container flex h-full flex-col p-6">
+            {/* Bordered surface for the whole review section, matching the
+                cascade dropdowns across the divider: same --input-background
+                + --border-color + rounded-md recipe that Select.tsx's
+                `controlBaseStyle` applies to every control in "Choose Image
+                Configuration". The nested SummaryPanels paint themselves
+                --page-background, which is darker than --input-background in
+                the light theme and lighter in dark, so they stay legible as
+                distinct tables against this container in both. */}
+            <div
+              className="flex min-h-0 flex-1 flex-col rounded-md border p-4"
+              style={{
+                background: 'var(--input-background)',
+                borderColor: 'var(--border-color)',
+              }}
+            >
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <h2
+                  className="text-sm font-semibold uppercase tracking-wide whitespace-nowrap"
+                  style={{ color: 'var(--muted-color)' }}
+                >
+                  Image Configuration Review
+                </h2>
+                {/* Hamburger → template-YAML drawer. Styled after
+                    YamlEditor's fullscreen toggle (26×26, bordered, JS hover)
+                    so the two YAML affordances feel related. */}
+                <button
+                  type="button"
+                  onClick={() => setYamlOpen(true)}
+                  disabled={!complete}
+                  aria-label="View template YAML"
+                  // haspopup="dialog", not aria-expanded: the drawer is a
+                  // modal dialog, not a disclosure region this button owns.
+                  aria-haspopup="dialog"
+                  title="View template YAML"
+                  style={{
+                    flex: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 26,
+                    height: 26,
+                    borderRadius: 4,
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--input-background)',
+                    color: 'var(--muted-color)',
+                    cursor: complete ? 'pointer' : 'not-allowed',
+                    opacity: complete ? 1 : 0.5,
+                    padding: 0,
+                    lineHeight: 0,
+                    transition: 'color 160ms ease, background-color 160ms ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!complete) return
+                    e.currentTarget.style.color = 'var(--font-color)'
+                    e.currentTarget.style.background =
+                      'color-mix(in srgb, var(--classic-blue) 8%, var(--input-background))'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--muted-color)'
+                    e.currentTarget.style.background = 'var(--input-background)'
+                  }}
+                >
+                  <MenuIcon />
+                </button>
+              </div>
+              <p
+                className="mb-4 text-xs whitespace-nowrap overflow-hidden text-ellipsis"
+                style={{
+                  color: 'var(--muted-color)',
+                  opacity: complete ? 1 : 0.5,
+                  transition: 'opacity 260ms ease 120ms',
+                }}
+              >
+                {complete
+                  ? 'Resolved from your selection. ☰ opens the template YAML.'
+                  : 'Complete the form to review'}
+              </p>
+              <div
+                className="min-h-0 flex-1 overflow-y-auto"
+                style={{
+                  opacity: complete ? 1 : 0,
+                  pointerEvents: complete ? 'auto' : 'none',
+                  transition: 'opacity 320ms ease 120ms',
+                }}
+                /* Note: intentionally NOT using `transform: translateX(...)` here.
+                   A permanent `transform` value on the style attribute establishes
+                   a containing block for fixed-position descendants (CSS spec),
+                   which would trap the YamlEditor's fullscreen overlay inside
+                   this pane instead of covering the viewport. The 8px horizontal
+                   slide was cosmetic; the pane's own width animation (0 → 45 %)
+                   already carries most of the "drop-in" feel. */
+              >
+                {/* grid-cols-1 only, and deliberately no two-column variant at
+                    the `xl` breakpoint — Tailwind breakpoints are
+                    viewport-relative, so on a wide screen it would fire and
+                    squeeze two summary tables into this 45%-wide pane.
+                    (The `@max-pane-*` container variants elsewhere in the app
+                    exist precisely to solve that; here one column is simply
+                    the right answer at every width, so there's nothing to
+                    make responsive — this pane holds a review summary, not a
+                    form, and stacked panels read better than side-by-side.) */}
+                {review && (
+                  <div className="grid grid-cols-1 gap-3 text-sm">
                     <SummaryPanel
                       heading="Your Selection"
                       rows={
@@ -396,66 +543,34 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
                       }
                     />
                   </div>
-                </Card>
-              )}
-            </Collapsible>
-
-          </div>
-        </Panel>
-
-        <PanelResizeHandle
-          className="resize-handle group"
-          /* When the preview is collapsed the handle would be a stray 8-px
-             vertical strip against the right edge of the form — hide it. */
-          style={{ display: complete ? 'block' : 'none' }}
-        >
-          <div className="resize-grip" aria-hidden />
-        </PanelResizeHandle>
-
-        <Panel
-          ref={rightPanelRef}
-          defaultSize={complete ? 45 : 0}
-          minSize={0}
-        >
-          {/* Everything except the header row lives inside a fader that
-              hides the editor while the panel is skinny (rendering a 480px
-              CodeMirror inside a 6% strip looks terrible). Fade + slide as
-              the pane drops in. */}
-          <div className="flex h-full flex-col p-6">
-            <h2
-              className="mb-1 text-sm font-semibold uppercase tracking-wide whitespace-nowrap"
-              style={{ color: 'var(--muted-color)' }}
-            >
-              Template Preview
-            </h2>
-            <p
-              className="mb-4 text-xs whitespace-nowrap overflow-hidden text-ellipsis"
-              style={{
-                color: 'var(--muted-color)',
-                opacity: complete ? 1 : 0.5,
-                transition: 'opacity 260ms ease 120ms',
-              }}
-            >
-              {complete
-                ? 'Read-only. Updates as you change the selection on the left.'
-                : 'Complete the form to preview'}
-            </p>
-            <div
-              className="min-h-0 flex-1"
-              style={{
-                opacity: complete ? 1 : 0,
-                pointerEvents: complete ? 'auto' : 'none',
-                transition: 'opacity 320ms ease 120ms',
-              }}
-              /* Note: intentionally NOT using `transform: translateX(...)` here.
-                 A permanent `transform` value on the style attribute establishes
-                 a containing block for fixed-position descendants (CSS spec),
-                 which would trap the YamlEditor's fullscreen overlay inside
-                 this pane instead of covering the viewport. The 8px horizontal
-                 slide was cosmetic; the pane's own width animation (0 → 45 %)
-                 already carries most of the "drop-in" feel. */
-            >
-              <LiveYamlPreview selection={selection} complete={complete} />
+                )}
+                {!review && reviewLoading && (
+                  <p className="text-xs" style={{ color: 'var(--muted-color)' }}>
+                    Resolving configuration…
+                  </p>
+                )}
+                {!review && reviewError && (
+                  <div
+                    className="rounded-md border p-3 text-xs"
+                    style={{
+                      borderColor:
+                        'color-mix(in srgb, var(--danger) 45%, var(--border-color))',
+                      background:
+                        'color-mix(in srgb, var(--danger) 6%, var(--section-background))',
+                    }}
+                  >
+                    <p className="font-semibold" style={{ color: 'var(--danger)' }}>
+                      Review unavailable
+                    </p>
+                    <p
+                      className="mt-1 font-mono break-words"
+                      style={{ color: 'var(--muted-color)' }}
+                    >
+                      {reviewError}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </Panel>
@@ -482,50 +597,43 @@ export function BasicPage({ onBuildStarted }: BasicPageProps) {
         </div>
       </footer>
 
-      {/* Local styling: page shell fills the viewport minus header, and the
-          drag handle gets a proper visual + hover state. */}
-      <style>{`
-        .basic-page-shell {
-          height: calc(100vh - 3.75rem); /* nav ~60px; adjust if header height changes */
-          min-height: 0;
-          display: flex;
-          flex-direction: column;
-        }
-        .action-footer {
-          flex: none;
-          border-top: 1px solid var(--border-color);
-          background: color-mix(in srgb, var(--section-background) 92%, transparent);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-        }
-        .resize-handle {
-          position: relative;
-          width: 8px;
-          background: transparent;
-          transition: background-color 160ms ease;
-          cursor: col-resize;
-        }
-        .resize-handle:hover,
-        .resize-handle[data-panel-resize-handle-active] {
-          background: color-mix(in srgb, var(--classic-blue) 25%, transparent);
-        }
-        .resize-grip {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          transform: translate(-50%, -50%);
-          width: 2px;
-          height: 40px;
-          border-radius: 1px;
-          background: var(--border-color);
-          transition: background-color 160ms ease, height 160ms ease;
-        }
-        .resize-handle:hover .resize-grip,
-        .resize-handle[data-panel-resize-handle-active] .resize-grip {
-          background: var(--classic-blue);
-          height: 60px;
-        }
-      `}</style>
+      {/*
+       * Template-YAML drawer.
+       *
+       * LiveYamlPreview is handed through untouched — it is self-fetching
+       * (200ms debounce + AbortController) and needs only these two props.
+       * The drawer traps focus, so the selection can't change while it's
+       * open and the preview resolves exactly once per open.
+       *
+       * `closeOnEscape` defers to the YamlEditor inside: both it and
+       * DialogOverlay install document-level capture-phase Escape handlers
+       * that stopPropagation, and DialogOverlay's is registered first
+       * (on mount vs. on entering fullscreen). Without this, Escape while
+       * fullscreen would tear down the whole drawer instead of just
+       * leaving fullscreen.
+       *
+       * The drawer slides via `right`, never `transform` — see the
+       * containing-block note on the pane above and in DialogOverlay's
+       * header: a transform here would trap that same fullscreen overlay
+       * inside the 720px panel.
+       */}
+      <DialogOverlay
+        open={yamlOpen}
+        onClose={() => setYamlOpen(false)}
+        variant="drawer-right"
+        closeOnEscape={!yamlFullscreen}
+        title="Template Preview"
+        ariaLabelledBy="basic-yaml-drawer-title"
+      >
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <p className="mb-3 text-xs" style={{ color: 'var(--muted-color)' }}>
+            Read-only. Resolved from the selection on the left.
+          </p>
+          <div className="min-h-0 flex-1">
+            <LiveYamlPreview selection={selection} complete={complete} />
+          </div>
+        </div>
+      </DialogOverlay>
     </div>
   )
 }

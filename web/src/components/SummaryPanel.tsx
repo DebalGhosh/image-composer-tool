@@ -6,10 +6,16 @@
  * Rows: [key, value] tuples, or `null` for a row we want to hide (used when
  * an optional summary field is empty). Nulls are filtered inline.
  *
- * Layout: key column is fixed-width (w-32) so labels line up cleanly across
- * both panels; value column stretches (align-top so long descriptions wrap
- * without pulling the key label off the baseline). Rows are separated by a
- * subtle divider in --border-color for readability.
+ * Layout: key column is fixed-width so labels line up cleanly across both
+ * panels; value column stretches (align-top so long descriptions wrap without
+ * pulling the key label off the baseline). Rows are separated by a subtle
+ * divider in --border-color for readability.
+ *
+ * The 144px key column (w-32) drops to 80px (w-20) below the container's
+ * 2-col threshold: cross-panel alignment only matters while the two panels
+ * actually sit side by side, i.e. while the container is wide. Below that
+ * they're stacked, there is nothing to align to, and the fixed 144px is just
+ * a floor squeezing the value column.
  */
 export function SummaryPanel({
   heading,
@@ -42,7 +48,7 @@ export function SummaryPanel({
               style={{ borderColor: 'var(--border-color)' }}
             >
               <td
-                className="w-32 py-2 pr-4 align-top font-semibold whitespace-nowrap"
+                className="@max-pane-2col:w-20 w-32 py-2 pr-4 align-top font-semibold whitespace-nowrap"
                 style={{ color: 'var(--muted-color)' }}
               >
                 {k}

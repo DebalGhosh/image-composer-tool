@@ -155,7 +155,7 @@ export function BuildImagePage({
   )
 
   return (
-    <div className="build-image-shell">
+    <div className="page-shell">
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <PanelGroup direction="horizontal" autoSaveId="ict.buildImage.split">
           <Panel
@@ -270,42 +270,6 @@ export function BuildImagePage({
           <HistoryToggleChevron collapsed={collapsed} />
         </button>
       </div>
-
-      <style>{`
-        .build-image-shell {
-          height: calc(100vh - 3.75rem);
-          min-height: 0;
-          display: flex;
-          flex-direction: column;
-        }
-        .build-image-shell .resize-handle {
-          position: relative;
-          width: 8px;
-          background: transparent;
-          transition: background-color 160ms ease;
-          cursor: col-resize;
-        }
-        .build-image-shell .resize-handle:hover,
-        .build-image-shell .resize-handle[data-panel-resize-handle-active] {
-          background: color-mix(in srgb, var(--classic-blue) 25%, transparent);
-        }
-        .build-image-shell .resize-grip {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          transform: translate(-50%, -50%);
-          width: 2px;
-          height: 40px;
-          border-radius: 1px;
-          background: var(--border-color);
-          transition: background-color 160ms ease, height 160ms ease;
-        }
-        .build-image-shell .resize-handle:hover .resize-grip,
-        .build-image-shell .resize-handle[data-panel-resize-handle-active] .resize-grip {
-          background: var(--classic-blue);
-          height: 60px;
-        }
-      `}</style>
     </div>
   )
 }
