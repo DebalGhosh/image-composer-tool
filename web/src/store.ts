@@ -17,17 +17,35 @@ export type Theme = 'light' | 'dark'
 
 const THEME_KEY = 'ict.theme'
 
+/**
+ * Resolves the theme for this page load.
+ *
+ * Dark is the product default: a first-time visitor lands in dark mode. The
+ * OS `prefers-color-scheme` hint is deliberately NOT consulted — it used to
+ * be the tiebreaker, but a default that follows the OS isn't a default, it's
+ * a coin flip, and the operator-console surfaces (build log terminal, YAML
+ * editor) are designed dark-first.
+ *
+ * Only an explicit stored `'light'` opts out. Testing for that rather than
+ * for `'dark'` means an absent key, an unreadable store, and a corrupted
+ * value all resolve to the default instead of silently reverting to light.
+ *
+ * Returning a stored value round-trips through setTheme, so a user's choice
+ * still survives reloads in both directions — this changes the cold-start
+ * default only.
+ *
+ * Twin of the inline bootstrap in index.html, which must apply the identical
+ * rule earlier (before any module loads) to stay FOUC-free. Change both.
+ */
 function readInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'light'
+  if (typeof window === 'undefined') return 'dark'
   try {
-    const stored = window.localStorage.getItem(THEME_KEY)
-    if (stored === 'dark' || stored === 'light') return stored
+    if (window.localStorage.getItem(THEME_KEY) === 'light') return 'light'
   } catch {
-    /* localStorage may be unavailable in private modes. */
+    /* localStorage may be unavailable in private modes — fall through to the
+     * default, matching index.html's behaviour when the read throws. */
   }
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light'
+  return 'dark'
 }
 
 function applyThemeClass(theme: Theme) {

@@ -6,18 +6,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Image Composer Tool</title>
     <script>
-      // Apply the persisted theme class BEFORE React mounts so dark-mode
-      // users don't see a light flash on cold reload. Kept intentionally
-      // synchronous and side-effect-only.
+      // Apply the theme class BEFORE React mounts so there is no light flash
+      // on cold reload. Kept intentionally synchronous and side-effect-only.
+      //
+      // Dark is the DEFAULT: a first-time visitor (nothing in localStorage)
+      // gets dark mode. Only an explicit stored 'light' opts out, which is
+      // why the test is `!== 'light'` rather than `=== 'dark'` — that also
+      // makes a corrupted value fall back to the default instead of light.
+      //
+      // The read is deliberately OUTSIDE the class-adding branch: if
+      // localStorage throws (private browsing), we still want dark, so the
+      // throw must not skip the add. Private mode can't persist a choice, so
+      // it is a first visit every time.
+      //
+      // Twin of readInitialTheme() in src/store.ts — change both together or
+      // the class on <html> and the store's `theme` field disagree.
       (function () {
+        var s = null;
         try {
-          var s = localStorage.getItem('ict.theme');
-          var d =
-            s === 'dark' ||
-            (!s && window.matchMedia &&
-              window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (d) document.documentElement.classList.add('dark');
+          s = localStorage.getItem('ict.theme');
         } catch (e) {}
+        if (s !== 'light') document.documentElement.classList.add('dark');
       })();
     </script>
   </head>
