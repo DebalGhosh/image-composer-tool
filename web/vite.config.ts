@@ -1,10 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { fileURLToPath, URL } from 'node:url'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    // Mirror of `paths` in tsconfig.app.json. BOTH are required: tsconfig
+    // teaches the type checker, this teaches the bundler. Omit this one and
+    // `tsc -b` passes while `vite build` fails to resolve '@/...'.
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   server: {
     // Listen on all interfaces so a remote browser (e.g. over SSH) can reach the
     // dev server at the host's IP without a tunnel. Harmless for local use.

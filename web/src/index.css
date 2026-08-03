@@ -95,6 +95,38 @@
   --danger-fg: #c81326;
   --success: #4e9f0f;
 
+  /* -----------------------------------------------------------------------
+   * Status-chip foregrounds (Build history rows — see BuildHistoryList).
+   *
+   * SEPARATE tokens rather than reusing --warning / --success / --danger,
+   * because those three are also used as SOLID fills (the Header build
+   * indicator dot) and as 1px borders (toasts), where a lightness shift
+   * would be wrong. A chip is small bold TEXT on a tinted plate, which is
+   * the one context that needs a per-theme lightness of its own.
+   *
+   * Light mode darkens the base hue (hue preserved, ~5% chroma trim) so a
+   * 14% tint plate clears WCAG AA. The shipped --warning/--success were
+   * never legible here: #c98f00 on its own tint is 2.5:1, #4e9f0f is 2.9:1.
+   *
+   *   running #c98f00 -> #905c00   on #efe8db = 4.64:1
+   *   success #4e9f0f -> #2b7700   on #e1ecdb = 4.60:1
+   *   failed  #c81326 -> #c4202b   on #f7e0e1 = 4.65:1
+   *   idle    --muted-color #5c5f66 on #e8e9ea = 5.26:1
+   * --------------------------------------------------------------------- */
+  --chip-running-fg: #905c00;
+  --chip-success-fg: #2b7700;
+  --chip-failed-fg: #c4202b;
+  --chip-idle-fg: #5c5f66;
+  /* worker/build-# chip. Light mode's --classic-blue is already dark enough
+   * (#0054ae on its own tint = 5.82:1), so this just tracks the accent. */
+  --chip-worker-fg: #0054ae;
+
+  /* Plate strength, per theme — NOT a shared constant. Light needs the
+   * weaker tint: at 16% the light plates darken enough to drop Done to
+   * 4.46:1, just under AA. Dark needs the stronger one to lift the plate
+   * clear of the near-black surface. */
+  --chip-tint: 14%;
+
   --toast-danger-bg: rgba(200, 19, 38, 0.06);
   --toast-danger-border: #c81326;
   --toast-success-bg: rgba(78, 159, 15, 0.08);
@@ -184,6 +216,48 @@
    * picks it up automatically via var(--classic-blue).
    */
   --classic-blue: #0099ec;
+
+  /*
+   * Status-chip foregrounds, LIFTED for dark mode — the same move as
+   * --classic-blue and --danger-fg above, applied to the two accents that
+   * never got it. --warning (#c98f00) and --success (#4e9f0f) sit at OKLCh
+   * L≈0.63-0.69 against a surface at L=0.265; mixed into that near-black
+   * they produced #423821 (mustard mud, 4.07:1) and #2c3b24 (swamp green,
+   * 3.58:1). Failed was worst at 2.40:1.
+   *
+   * Hue is preserved — Running is still the same yellow, Done the same
+   * green. Only lightness moves, into the L≈0.74-0.80 band the two
+   * already-lifted tokens occupy:
+   *
+   *   running #c98f00 -> #f0b429  L 0.804   on #453c28 = 5.84:1
+   *   success #4e9f0f -> #6cc644  L 0.744   on #303f2c = 5.23:1
+   *   failed  reuses --danger-fg  L 0.755   on #473439 = 4.96:1
+   *   idle    --muted-color               on #393a3e = 4.94:1
+   *
+   * Those ratios hold on a hovered and on a selected row too, because the
+   * chip plate is an OPAQUE mix into --section-background rather than a
+   * translucent `%, transparent` fill. With a translucent fill the plate
+   * floats up with the row surface and Done collapsed to 4.47:1.
+   */
+  --chip-running-fg: #f0b429;
+  --chip-success-fg: #6cc644;
+  --chip-failed-fg: #ff8590;
+  --chip-idle-fg: #a8abb2;
+  --chip-tint: 16%;
+
+  /*
+   * The worker chip needs its OWN lift rather than tracking --classic-blue.
+   * Tine-1 (#0099ec) is the right accent for links and focus rings, but at
+   * L=0.658 it is darker than the four chip foregrounds above (L 0.74-0.80),
+   * so on the same 16% plate it only reaches 3.95:1 — the one chip that
+   * still failed after the opaque-mix fix. #5cc2f5 keeps the hue (233 vs
+   * 244) and lands at L=0.774, inside the chip band, for 5.53:1.
+   *
+   * Scoped to the chip on purpose: --classic-blue itself is untouched, so
+   * hyperlinks, focus rings, the Segmented pill and the resize handle all
+   * keep the accent they were designed with.
+   */
+  --chip-worker-fg: #5cc2f5;
 
   --toast-danger-bg: rgba(200, 19, 38, 0.15);
   --toast-success-bg: rgba(78, 159, 15, 0.18);
@@ -315,6 +389,76 @@ h3 {
 .resize-handle[data-panel-resize-handle-active] .resize-grip {
   background: var(--classic-blue);
   height: 60px;
+}
+
+/* -------------------------------------------------------------------------
+ * Build-history row (BuildHistoryList) — rest / hover / selected.
+ *
+ * These live in CSS, not in the JSX, for a specificity reason worth keeping:
+ * the row previously set `background` as an INLINE style, and an inline style
+ * beats every class-based `hover:bg-*` utility. So the row carried
+ * `transition-colors` while having nothing to transition — there was no
+ * hover state at all, and adding one as a Tailwind variant silently would
+ * not have worked.
+ *
+ * Hover is NEUTRAL and selected is BLUE-TINTED, and that split is
+ * load-bearing rather than cosmetic. In dark mode the two land at almost
+ * the same lightness (OKLCh L 0.309 vs 0.311), so what separates them is
+ * CHROMA (0.006 vs 0.034). A blue-tinted hover would have been nearly
+ * indistinguishable from selection on the page operators watch longest.
+ *
+ * Only background-color / border-color / box-shadow transition. NOT
+ * transform: a transform on a row would make it a containing block for
+ * `position: fixed` descendants and a new stacking context — the trap
+ * documented at length in .claude/UI-LAYOUT.md §3. Nothing inside a row
+ * needs it today, and this keeps it that way.
+ * ------------------------------------------------------------------------- */
+.history-row {
+  background: var(--section-background);
+  border-color: var(--border-color);
+  transition:
+    background-color 160ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    border-color 160ms cubic-bezier(0.22, 0.7, 0.32, 1),
+    box-shadow 160ms cubic-bezier(0.22, 0.7, 0.32, 1);
+}
+
+/* Unselected hover: a neutral lift off the surface. white/black rather than
+ * an accent so it stays clearly distinct from the selected state. */
+.history-row:hover {
+  background: color-mix(in srgb, #000 4%, var(--section-background));
+}
+.dark .history-row:hover {
+  background: color-mix(in srgb, #fff 5%, var(--section-background));
+}
+
+/* Selected: accent-tinted plate + a 1px ring in the accent colour. The
+ * attribute-selector form mirrors .resize-handle[data-panel-resize-handle-active]
+ * above, so state-driven styling looks the same throughout this file. */
+.history-row[data-selected='true'] {
+  background: color-mix(in srgb, var(--classic-blue) 8%, var(--section-background));
+  border-color: var(--classic-blue);
+  box-shadow: 0 0 0 1px var(--classic-blue);
+}
+.dark .history-row[data-selected='true'] {
+  background: color-mix(in srgb, var(--classic-blue) 12%, var(--section-background));
+}
+
+/* Selected AND hovered: one more step in the same direction, so hovering the
+ * already-selected row still gives feedback instead of reading as inert. */
+.history-row[data-selected='true']:hover {
+  background: color-mix(in srgb, var(--classic-blue) 11%, var(--section-background));
+}
+.dark .history-row[data-selected='true']:hover {
+  background: color-mix(in srgb, var(--classic-blue) 16%, var(--section-background));
+}
+
+/* First reduced-motion rule in the app. The colour CHANGE is the affordance
+ * and is preserved; only its animation is dropped, so a user who asked the
+ * OS for less motion still gets full hover/selection feedback. */
+@media (prefers-reduced-motion: reduce) {
+  .history-row {
+    transition: none;
+  }
 }
 
 /* Fullscreen terminal host. When the browser promotes this element into the

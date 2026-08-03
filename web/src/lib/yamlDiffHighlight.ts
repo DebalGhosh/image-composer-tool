@@ -35,6 +35,8 @@ import {
   StateEffect,
   StateField,
   type Extension,
+  type Text,
+  type Transaction,
 } from '@codemirror/state'
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view'
 
@@ -139,87 +141,139 @@ function emptyState(): DecoState {
   return { set: Decoration.none, epochByPos: new Map() }
 }
 
+/**
+ * Re-map decorations and their epochs through a document change.
+ *
+ * CodeMirror maps the DecorationSet itself, but the parallel epoch Map is keyed
+ * by absolute position and it cannot: every key has to be pushed through
+ * `tr.changes.mapPos` to find where it landed. An epoch that fails to follow its
+ * decoration would make the range un-clearable, so it would flash and then stay
+ * highlighted until the next doc change happened to evict it.
+ *
+ * The `-1` bias on mapPos matches how line decorations anchor at line START:
+ * text inserted exactly at the boundary belongs to the following line, so the
+ * decoration stays put rather than sliding forward.
+ *
+ * NOTE, from mutation-testing this function: flipping that bias to `+1` breaks
+ * NO test, and that is not a coverage gap. CodeMirror's own `set.map()` has
+ * already decided where the decoration went; this lookup only has to AGREE with
+ * it, and for an insertion at a line boundary both biases agree. The bias is
+ * therefore a correctness argument for a case the platform already handles, not
+ * a behaviour this module decides. Kept as documentation of intent.
+ */
+function remapThroughDocChange(
+  prev: DecoState,
+  tr: Transaction,
+): DecoState {
+  const mappedSet = prev.set.map(tr.changes)
+  const mappedEpochs = new Map<number, number>()
+  const iter = mappedSet.iter()
+  while (iter.value) {
+    const oldEntry = [...prev.epochByPos.entries()].find(
+      ([oldPos]) => tr.changes.mapPos(oldPos, -1) === iter.from,
+    )
+    if (oldEntry) mappedEpochs.set(iter.from, oldEntry[1])
+    iter.next()
+  }
+  return { set: mappedSet, epochByPos: mappedEpochs }
+}
+
+/** One decoration plus the epoch that owns it, at an absolute position. */
+interface Item {
+  pos: number
+  deco: Decoration
+  epoch: number
+}
+
+/** Flatten a DecoState into a position-ordered list we can splice. */
+function toItems(state: DecoState): Item[] {
+  const items: Item[] = []
+  const iter = state.set.iter()
+  while (iter.value) {
+    items.push({
+      pos: iter.from,
+      deco: iter.value,
+      epoch: state.epochByPos.get(iter.from) ?? 0,
+    })
+    iter.next()
+  }
+  return items
+}
+
+/** Rebuild a DecoState from items. RangeSetBuilder REQUIRES ascending order. */
+function fromItems(items: Item[]): DecoState {
+  const sorted = [...items].sort((x, y) => x.pos - y.pos)
+  const builder = new RangeSetBuilder<Decoration>()
+  const epochByPos = new Map<number, number>()
+  for (const it of sorted) {
+    builder.add(it.pos, it.pos, it.deco)
+    epochByPos.set(it.pos, it.epoch)
+  }
+  return { set: builder.finish(), epochByPos }
+}
+
+/**
+ * Add flash decorations for `lines`, superseding any already at those positions.
+ *
+ * Replacing rather than stacking is deliberate: CodeMirror permits two
+ * decorations at one position, but the second one's `animation` would restart
+ * the first's, so a line edited twice in quick succession would visibly stutter.
+ *
+ * Out-of-range line numbers are skipped rather than throwing — `doc.line()`
+ * throws, and the differ runs against a string the editor may not have applied
+ * yet, so a stale line number is possible in principle.
+ */
+function applyFlash(
+  state: DecoState,
+  lines: number[],
+  epoch: number,
+  doc: Text,
+): DecoState {
+  const items = toItems(state)
+  for (const ln of lines) {
+    if (ln < 1 || ln > doc.lines) continue
+    const pos = doc.line(ln).from
+    const idx = items.findIndex((it) => it.pos === pos)
+    if (idx >= 0) items.splice(idx, 1)
+    items.push({ pos, deco: flashDeco(epoch), epoch })
+  }
+  return fromItems(items)
+}
+
+/**
+ * Drop every decoration owned by `epoch`, keeping all others.
+ *
+ * Epoch-scoped rather than a blanket clear so a flash dispatched while an
+ * earlier one is still fading removes only its own ranges when its timer fires.
+ */
+function clearEpoch(state: DecoState, epoch: number): DecoState {
+  return fromItems(toItems(state).filter((it) => it.epoch !== epoch))
+}
+
 const diffField = StateField.define<DecoState>({
   create: () => emptyState(),
+  /**
+   * Three independent steps, in this order and no other:
+   *   1. follow the document if it changed, so existing flashes stay on their
+   *      lines and keep their epochs;
+   *   2. add any newly flashed lines;
+   *   3. drop any epoch whose fade timer has fired.
+   *
+   * Order matters: a transaction can legitimately carry BOTH a flash and a
+   * clear, and remapping has to happen before either so both operate on
+   * positions that exist in the new document.
+   */
   update(prev, tr) {
-    let next = prev
-    // Re-map positions if the doc changed. Line decorations survive
-    // insertion/deletion via CodeMirror's built-in position mapping.
-    if (tr.docChanged) {
-      const mappedSet = prev.set.map(tr.changes)
-      const mappedEpochs = new Map<number, number>()
-      // Rebuild the epoch map by walking the mapped decoration set and
-      // asking each decoration for its (new) start position.
-      const iter = mappedSet.iter()
-      while (iter.value) {
-        const oldEntry = [...prev.epochByPos.entries()].find(([oldPos]) => {
-          // Map old pos through the transaction to see if it maps to `iter.from`.
-          return tr.changes.mapPos(oldPos, -1) === iter.from
-        })
-        if (oldEntry) {
-          mappedEpochs.set(iter.from, oldEntry[1])
-        }
-        iter.next()
-      }
-      next = { set: mappedSet, epochByPos: mappedEpochs }
-    }
-
+    let next = tr.docChanged ? remapThroughDocChange(prev, tr) : prev
     for (const effect of tr.effects) {
       if (effect.is(flashLinesEffect)) {
         const { lines, epoch } = effect.value
-        // Build a fresh RangeSet from the union of existing decorations +
-        // new ones, then merge back into the state.
-        const builder = new RangeSetBuilder<Decoration>()
-        const doc = tr.state.doc
-        // First: replay existing decorations (in position order).
-        // Second: add new ones.
-        // RangeSetBuilder requires monotonic positions, so we merge into a
-        // sorted list first.
-        interface Item {
-          pos: number
-          deco: Decoration
-          epoch: number
-        }
-        const items: Item[] = []
-        const iter = next.set.iter()
-        while (iter.value) {
-          const e = next.epochByPos.get(iter.from) ?? 0
-          items.push({ pos: iter.from, deco: iter.value, epoch: e })
-          iter.next()
-        }
-        const newEpochMap = new Map(next.epochByPos)
-        for (const ln of lines) {
-          if (ln < 1 || ln > doc.lines) continue
-          const pos = doc.line(ln).from
-          // Drop any existing decoration at this same line-start so we don't
-          // stack two decorations on the same position (CodeMirror allows it
-          // but the second animation would restart the first).
-          const idx = items.findIndex((it) => it.pos === pos)
-          if (idx >= 0) items.splice(idx, 1)
-          items.push({ pos, deco: flashDeco(epoch), epoch })
-          newEpochMap.set(pos, epoch)
-        }
-        items.sort((x, y) => x.pos - y.pos)
-        for (const it of items) builder.add(it.pos, it.pos, it.deco)
-        next = { set: builder.finish(), epochByPos: newEpochMap }
+        next = applyFlash(next, lines, epoch, tr.state.doc)
       }
       if (effect.is(clearEpochEffect)) {
-        const drop = effect.value
-        const builder = new RangeSetBuilder<Decoration>()
-        const kept = new Map<number, number>()
-        const iter = next.set.iter()
-        while (iter.value) {
-          const e = next.epochByPos.get(iter.from) ?? 0
-          if (e !== drop) {
-            builder.add(iter.from, iter.from, iter.value)
-            kept.set(iter.from, e)
-          }
-          iter.next()
-        }
-        next = { set: builder.finish(), epochByPos: kept }
+        next = clearEpoch(next, effect.value)
       }
     }
-
     return next
   },
   provide: (f) => EditorView.decorations.from(f, (state) => state.set),

@@ -1,206 +1,55 @@
-import { useMemo } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import type { Manifest, Combination } from './api/types'
-
-// --- Theme bootstrap ---------------------------------------------------------
-//
-// Runs at module load so the .dark class is on <html> BEFORE React first paints.
-// A twin snippet in index.html runs even earlier (before any JS module loads)
-// so cold reloads are FOUC-free too; this block keeps the store's `theme`
-// field in lockstep with the class already on <html>.
-//
-// We reuse the SAME localStorage key that Header.tsx has been writing to
-// (`ict.theme`), so no migration is required.
-
-export type Theme = 'light' | 'dark'
-
-const THEME_KEY = 'ict.theme'
+import type { Manifest } from '@/api/types'
+import type {
+  InteractiveDraft,
+  Selection,
+  Toast,
+  ToastInput,
+} from './store/types'
+import { emptyInteractiveDraft } from './store/types'
+import type { Theme } from './store/theme'
+import { applyThemeClass, initialTheme, THEME_KEY } from './store/theme'
 
 /**
- * Resolves the theme for this page load.
+ * The app store: one Zustand store, four slices' worth of state.
  *
- * Dark is the product default: a first-time visitor lands in dark mode. The
- * OS `prefers-color-scheme` hint is deliberately NOT consulted — it used to
- * be the tiebreaker, but a default that follows the OS isn't a default, it's
- * a coin flip, and the operator-console surfaces (build log terminal, YAML
- * editor) are designed dark-first.
+ * FE-7b split the SHAPES (store/types.ts), the theme bootstrap
+ * (store/theme.ts), the Basic tab's dependent-dropdown logic
+ * (store/cascade.ts) and the toast ergonomics hook (store/useToast.ts) into
+ * their own modules. What stayed is the part that genuinely cannot move: the
+ * single `create()` call and its persist configuration.
  *
- * Only an explicit stored `'light'` opts out. Testing for that rather than
- * for `'dark'` means an absent key, an unreadable store, and a corrupted
- * value all resolve to the default instead of silently reverting to light.
+ * ⚠️ THE STORE WAS NOT SPLIT INTO FOUR ZUSTAND STORES, AND MUST NOT BE.
+ * `partialize` names five fields across three of those "slices", and they are
+ * persisted TOGETHER under one key as one JSON blob. Four stores would mean four
+ * keys, which is a persisted-shape change — and PERSIST_VERSION is 2 with NO
+ * migrate(), so Zustand would find nothing at the old key and every operator
+ * with an in-progress draft would lose it on their next reload.
  *
- * Returning a stored value round-trips through setTheme, so a user's choice
- * still survives reloads in both directions — this changes the cold-start
- * default only.
- *
- * Twin of the inline bootstrap in index.html, which must apply the identical
- * rule earlier (before any module loads) to stay FOUC-free. Change both.
+ * Re-exports below keep '@/store' the single import site it has always been for
+ * all 18 consumers. Moving a symbol between store/ modules therefore costs
+ * nothing outside this directory.
  */
-function readInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'dark'
-  try {
-    if (window.localStorage.getItem(THEME_KEY) === 'light') return 'light'
-  } catch {
-    /* localStorage may be unavailable in private modes — fall through to the
-     * default, matching index.html's behaviour when the read throws. */
-  }
-  return 'dark'
-}
 
-function applyThemeClass(theme: Theme) {
-  if (typeof document === 'undefined') return
-  document.documentElement.classList.toggle('dark', theme === 'dark')
-}
+// Re-exported so consumers keep importing from '@/store'.
+export type {
+  InteractiveDraft,
+  Partition,
+  PartitionRole,
+  Selection,
+  Toast,
+  ToastInput,
+  ToastVariant,
+  UserConfig,
+} from './store/types'
+export type { Theme } from './store/theme'
+export { emptyInteractiveDraft } from './store/types'
+export type { DropdownOption } from './store/cascade'
+export { cascadingOptions } from './store/cascade'
+export type { ToastHelpers } from './store/useToast'
+export { useToast } from './store/useToast'
 
-const initialTheme = readInitialTheme()
-applyThemeClass(initialTheme)
-
-// Selection state for the Basic tab.
-export interface Selection {
-  vertical: string
-  sku: string
-  platform: string
-  os: string
-  kernel: string
-  imageType: string
-}
-
-// --- Toast slice --------------------------------------------------------
-// Kept in the app store (rather than a separate provider) so any component
-// can push a toast without threading context through the tree. The container
-// subscribes to `toasts` and renders them top-right.
-
-export type ToastVariant = 'info' | 'success' | 'warning' | 'danger'
-
-export interface Toast {
-  id: string
-  variant: ToastVariant
-  title?: string
-  message: string
-  /**
-   * Auto-dismiss delay in ms. 0 or negative means "sticky — user must dismiss".
-   * Default (set by pushToast) is 5000ms.
-   */
-  duration: number
-}
-
-export interface ToastInput {
-  variant: ToastVariant
-  title?: string
-  message: string
-  duration?: number
-}
-
-// --- Interactive-tab draft model ---------------------------------------
-// Structured, form-editable model of a CoreV1 image spec. The Interactive
-// tab edits this shape; on Build the same object is serialized to YAML and
-// posted to the same backend as the Advanced/Basic tabs. Kept in the store
-// (rather than local component state) so tab switches don't discard edits,
-// mirroring the advancedYaml slice above.
-
-export interface Partition {
-  id: string
-  name: string
-  role: 'efi' | 'bios-boot' | 'swap' | 'root' | 'verity' | 'userdata' | 'custom'
-  sizeMiB: number
-  /**
-   * Absolute start offset of the FIRST partition, in MiB, as written by the
-   * source template. Only meaningful on partitions[0]; later partitions are
-   * always packed end-to-end from the previous one.
-   *
-   * Templates conventionally start at 1MiB for alignment
-   * (`start: "1MiB"`, `end: "513MiB"`). The draft models partitions by SIZE,
-   * so without capturing this the serializer restarted at 0MiB and shifted
-   * every boundary down by 1MiB — silently changing the disk layout of 34 of
-   * the 59 shipped templates. Stored so an untouched round-trip reproduces the
-   * source byte-for-byte.
-   */
-  startOffsetMiB?: number
-  fillRemaining?: boolean
-  type: string
-  fsType: string
-  fsLabel?: string
-  mountPoint: string
-  mountOptions?: string
-  flags: string[]
-  typeUUID?: string
-}
-
-export interface UserConfig {
-  name: string
-  password: string
-  hashAlgo: 'sha512' | 'bcrypt'
-  groups: string[]
-  sudo: boolean
-  home: string
-  shell: string
-}
-
-export interface InteractiveDraft {
-  imageName: string
-  imageVersion: string
-  target: { os: string; dist: string; arch: string; imageType: string }
-  disk: {
-    sizeGiB: number
-    partitionTableType: 'gpt' | 'mbr'
-    partitions: Partition[]
-  }
-  kernel: {
-    version: string
-    cmdline: string
-    packages: string[]
-    enableExtraModules: string
-    uki: boolean
-  }
-  packages: string[]
-  hostname: string
-  /** Single user in v1 — null means "no user block emitted". */
-  user: UserConfig | null
-  /**
-   * Read-only round-trip carriers: sections we parse out of a loaded seed
-   * but don't yet expose in the form. Kept on the draft so a Build after
-   * an Interactive edit preserves them verbatim.
-   */
-  inheritedConfigurations: { cmd: string }[]
-  inheritedRepositories: unknown[]
-  /** Raw parsed YAML from the seed (or null when starting empty). */
-  baseDoc: unknown | null
-  /**
-   * The seed's ORIGINAL YAML text, exactly as served. Retained so that a draft
-   * the user never edited can be dispatched byte-for-byte instead of being
-   * re-serialized from the form model.
-   *
-   * Reconstructing is inherently lossy: the form models a subset of the schema,
-   * so any field it doesn't represent (and any value it normalises differently
-   * — partition alignment, MB vs MiB, extra users) comes out changed. Cycling
-   * templates in a dropdown without touching a control must not alter the
-   * template, so applyOverrides short-circuits to this string when the draft
-   * still round-trips equal to it. null when authoring from scratch.
-   */
-  baseYaml: string | null
-}
-
-export const emptyInteractiveDraft: InteractiveDraft = {
-  imageName: '',
-  imageVersion: '',
-  target: { os: 'ubuntu', dist: 'ubuntu24', arch: 'x86_64', imageType: 'raw' },
-  disk: { sizeGiB: 8, partitionTableType: 'gpt', partitions: [] },
-  kernel: {
-    version: '',
-    cmdline: 'console=ttyS0,115200 console=tty0 loglevel=7',
-    packages: [],
-    enableExtraModules: '',
-    uki: false,
-  },
-  packages: [],
-  hostname: '',
-  user: null,
-  inheritedConfigurations: [],
-  inheritedRepositories: [],
-  baseDoc: null,
-  baseYaml: null,
-}
 
 interface AppState {
   manifest: Manifest | null
@@ -365,129 +214,3 @@ export const useStore = create<AppState>()(
     },
   ),
 )
-
-// --- Derived cascading option helpers (pure functions over the manifest) ---
-
-function labelFor(options: { id: string; displayName: string }[], id: string): string {
-  return options.find((o) => o.id === id)?.displayName ?? id
-}
-
-// Distinct ids present in combinations, optionally filtered by prior selections.
-function distinct(
-  combos: Combination[],
-  field: keyof Combination,
-  filter: Partial<Selection>,
-): string[] {
-  const out: string[] = []
-  for (const c of combos) {
-    const matches = Object.entries(filter).every(
-      ([k, v]) => !v || c[k as keyof Combination] === v,
-    )
-    if (matches && c[field] && !out.includes(c[field] as string)) {
-      out.push(c[field] as string)
-    }
-  }
-  return out
-}
-
-export interface DropdownOption {
-  id: string
-  label: string
-}
-
-export function cascadingOptions(
-  manifest: Manifest,
-  selection: Selection,
-): {
-  verticals: DropdownOption[]
-  skus: DropdownOption[]
-  platforms: DropdownOption[]
-  oses: DropdownOption[]
-  kernels: DropdownOption[]
-  imageTypes: DropdownOption[]
-  matched: Combination | null
-} {
-  const c = manifest.combinations
-  const map = (ids: string[], labels: { id: string; displayName: string }[]) =>
-    ids.map((id) => ({ id, label: labelFor(labels, id) }))
-
-  const verticals = map(distinct(c, 'vertical', {}), manifest.verticals)
-  const skus = map(
-    distinct(c, 'sku', { vertical: selection.vertical }),
-    manifest.skus,
-  )
-  const platforms = map(
-    distinct(c, 'platform', { vertical: selection.vertical, sku: selection.sku }),
-    manifest.platforms,
-  )
-  const oses = map(
-    distinct(c, 'os', {
-      vertical: selection.vertical,
-      sku: selection.sku,
-      platform: selection.platform,
-    }),
-    manifest.targets,
-  )
-
-  // Kernel is an optional dimension: only combinations that carry a kernel value
-  // contribute. When none do, kernels is empty and the UI omits the selector —
-  // so RT vs standard is surfaced only where the metadata actually offers it.
-  const kernelIds = distinct(c, 'kernel', {
-    vertical: selection.vertical,
-    sku: selection.sku,
-    platform: selection.platform,
-    os: selection.os,
-  })
-  const kernelLabels: Record<string, string> = { standard: 'Standard', rt: 'Real-Time' }
-  const kernels = kernelIds.map((id) => ({ id, label: kernelLabels[id] ?? id }))
-
-  const imageTypeIds = distinct(c, 'imageType', {
-    vertical: selection.vertical,
-    sku: selection.sku,
-    platform: selection.platform,
-    os: selection.os,
-    ...(kernels.length > 0 ? { kernel: selection.kernel } : {}),
-  })
-  const imageTypes = imageTypeIds.map((id) => ({ id, label: id.toUpperCase() }))
-
-  const matched =
-    c.find(
-      (x) =>
-        x.vertical === selection.vertical &&
-        (x.sku || '') === selection.sku &&
-        x.platform === selection.platform &&
-        x.os === selection.os &&
-        (x.kernel || '') === selection.kernel &&
-        x.imageType === selection.imageType,
-    ) ?? null
-
-  return { verticals, skus, platforms, oses, kernels, imageTypes, matched }
-}
-
-// --- useToast hook ------------------------------------------------------
-// Thin ergonomic wrapper over pushToast/dismissToast. Callers get typed
-// helpers (`toast.danger(...)`) instead of remembering the variant string.
-// The returned object is memoized so passing it into effect deps is safe.
-
-export interface ToastHelpers {
-  info: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
-  success: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
-  warning: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
-  danger: (message: string, opts?: Omit<ToastInput, 'variant' | 'message'>) => string
-  dismiss: (id: string) => void
-}
-
-export function useToast(): ToastHelpers {
-  const push = useStore((s) => s.pushToast)
-  const dismiss = useStore((s) => s.dismissToast)
-  return useMemo<ToastHelpers>(
-    () => ({
-      info: (message, opts) => push({ ...opts, variant: 'info', message }),
-      success: (message, opts) => push({ ...opts, variant: 'success', message }),
-      warning: (message, opts) => push({ ...opts, variant: 'warning', message }),
-      danger: (message, opts) => push({ ...opts, variant: 'danger', message }),
-      dismiss,
-    }),
-    [push, dismiss],
-  )
-}

@@ -10,9 +10,21 @@ import type {
   PackageSearchRequest,
   PackageSearchResponse,
   PackageSearchResponseFull,
-} from './types'
+} from '@/api/types'
 
-const BASE = '/api/v1'
+/**
+ * Single definition of where the API lives.
+ *
+ * Exported (as API_BASE) so `api/sse.ts` can build stream and artifact URLs
+ * from the same constant. It used to be private, and BuildView consequently
+ * hand-wrote `/api/v1/builds/...` for artifact links — a second, unchecked
+ * definition that would not follow a change made here.
+ */
+export const API_BASE = '/api/v1'
+
+// Local alias: the rest of this file was written against `BASE` and there is no
+// value in churning ~20 call sites to rename it.
+const BASE = API_BASE
 
 // ApiError carries the HTTP status alongside the human-readable message so
 // callers can distinguish "build not on server" (404) from network failures

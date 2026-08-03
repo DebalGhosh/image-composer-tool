@@ -20,7 +20,7 @@
 // draft rather than crashing the Interactive tab.
 
 import YAML from 'yaml'
-import type { InteractiveDraft, Partition, UserConfig } from '../store'
+import type { InteractiveDraft, Partition, UserConfig } from '@/store'
 
 /* ------------------------------------------------------------------------- *
  * Dual-key access

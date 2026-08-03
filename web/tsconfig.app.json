@@ -16,7 +16,23 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Path alias. ⚠️ MUST be mirrored in vite.config.ts's resolve.alias AND
+     * vitest.config.ts — this entry only teaches the TYPE CHECKER. With just
+     * this, `tsc -b` passes and `vite build` fails to resolve at bundle time.
+     *
+     * No `baseUrl`: TypeScript 6 deprecates it (TS5101) and paths are resolved
+     * relative to this config file without it. */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
     /* Linting */
+    /* strict is on so that every file EXTRACTED from the god components during
+     * the decomposition is strict-clean on arrival. Splitting a non-strict file
+     * yields non-strict files, which would mean a second pass over every new
+     * one. Enabling it first was measured to cost nothing: zero errors across
+     * all of src/ with the build cache cleared. */
+    "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
