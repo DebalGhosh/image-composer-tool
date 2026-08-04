@@ -6,8 +6,11 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -381,4 +384,251 @@ func TestConcurrentPutGetSnapshot(t *testing.T) {
 		go func() { defer wg.Done(); _ = st.Snapshot() }()
 	}
 	wg.Wait()
+}
+
+// --- error paths ------------------------------------------------------------
+//
+// Everything above exercises the happy paths. The rest of this file covers what
+// happens when the filesystem says no, which is where a silent failure would
+// hurt most: state.json is the crawler's only memory, so a Save error that is
+// swallowed means the next boot re-downloads and re-ingests every shard, and an
+// Open error that is swallowed means the same thing plus a lost record of what
+// upstream looked like.
+
+func TestOpenReadErrorIsNotMistakenForAMissingFile(t *testing.T) {
+	// A DIRECTORY at the state path. This is the shape a bad volume mount takes in
+	// the container: `-v foo:/var/lib/pkgsvc/state.json` makes Docker create a
+	// directory. ReadFile then fails with EISDIR, which is neither fs.ErrNotExist
+	// nor a parse error — if that fell through to the "missing file, first run"
+	// branch the crawler would start from scratch on every single boot and never
+	// once persist its state, with nothing in the log to say why.
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err == nil {
+		t.Fatal("a directory at the state path must be an error, not a silent fresh start")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("error = %v, want something other than ErrNotExist", err)
+	}
+	if !strings.Contains(err.Error(), "state.Open") {
+		t.Errorf("error = %v, want it prefixed with state.Open", err)
+	}
+	if st != nil {
+		t.Error("a failed Open must return a nil store, not a half-built one")
+	}
+}
+
+func TestSaveMkdirFailureIsReported(t *testing.T) {
+	// The state directory is a DANGLING symlink — the shape a moved or unmounted
+	// data volume leaves behind. MkdirAll sees the link, finds it is not a real
+	// directory, and fails with EEXIST.
+	//
+	// Save must report that rather than return nil: the crawler treats a nil Save
+	// as "state persisted" and moves on, so a swallowed error costs a full re-crawl
+	// on every boot with nothing in the log to explain it.
+	//
+	// A dangling symlink rather than a chmod 0555 parent, deliberately: permission
+	// tricks are inert when the suite runs as root (in CI containers it usually
+	// does), and a test that silently skips there is a test that does not exist.
+	root := t.TempDir()
+	parent := filepath.Join(root, "pkgsvc")
+	if err := os.Symlink(filepath.Join(root, "gone", "target"), parent); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(filepath.Join(parent, "state.json"))
+	if err != nil {
+		t.Fatalf("Open of a not-yet-existing path must succeed: %v", err)
+	}
+	st.Put("a", Shard{Docs: 1})
+	err = st.Save()
+	if err == nil {
+		t.Fatal("Save must report a failure to create its parent directory")
+	}
+	if !strings.Contains(err.Error(), "mkdir") {
+		t.Errorf("error = %v, want it to name the mkdir step", err)
+	}
+}
+
+func TestSaveTempOpenFailureIsReported(t *testing.T) {
+	// Something already occupies <path>.tmp and is not a regular file. In practice
+	// this is a leftover from a botched manual recovery; the point is that Save
+	// reports it instead of silently not persisting.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.Mkdir(path+".tmp", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Put("a", Shard{Docs: 1})
+	err = st.Save()
+	if err == nil {
+		t.Fatal("Save must report that it could not open its temp file")
+	}
+	if !strings.Contains(err.Error(), "open tmp") {
+		t.Errorf("error = %v, want it to name the temp-open step", err)
+	}
+	// The real file was never created, so the previous state (here: none) stands.
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Errorf("Save created %s despite failing; a failed Save must leave the on-disk file untouched", path)
+	}
+}
+
+// symlinkTmpTo points <path>.tmp at a character device so Save's OpenFile
+// follows the link and inherits the device's write/fsync semantics. This is the
+// only way to make the encode and fsync branches fail without a filesystem that
+// can actually fill up.
+func symlinkTmpTo(t *testing.T, path, dev string) {
+	t.Helper()
+	if _, err := os.Stat(dev); err != nil {
+		t.Skipf("%s is unavailable: %v", dev, err)
+	}
+	if err := os.Symlink(dev, path+".tmp"); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", path+".tmp", dev, err)
+	}
+}
+
+func TestSaveEncodeFailureCleansUpAndReports(t *testing.T) {
+	// /dev/full accepts an open and then fails every write with ENOSPC — a disk
+	// that filled up between the open and the write, which is exactly what happens
+	// when a small state volume runs out mid-crawl. The contract: report it, remove
+	// the partial temp file, and leave the previously-saved state intact. Leaving
+	// the truncated temp behind would be a trap for the next recovery attempt.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	// Establish a good on-disk state first, so "left untouched" is verifiable
+	// rather than vacuous.
+	seed, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Put("keeper", Shard{Docs: 42, PackagesSHA256: "sha-of-record"})
+	if err := seed.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	symlinkTmpTo(t, path, "/dev/full")
+	seed.Put("newer", Shard{Docs: 99})
+	err = seed.Save()
+	if err == nil {
+		t.Fatal("Save must report a write failure (ENOSPC)")
+	}
+	if !strings.Contains(err.Error(), "encode") {
+		t.Errorf("error = %v, want it to name the encode step", err)
+	}
+	if _, statErr := os.Lstat(path + ".tmp"); !os.IsNotExist(statErr) {
+		t.Errorf("the temp file survived a failed encode (%v); Save must clean it up", statErr)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("the previously-saved state is no longer readable: %v", err)
+	}
+	sh, ok := reopened.Get("keeper")
+	if !ok || sh.Docs != 42 || sh.PackagesSHA256 != "sha-of-record" {
+		t.Errorf("on-disk shard = %+v (ok=%v), want the pre-failure values; a failed "+
+			"Save must not damage what was already persisted", sh, ok)
+	}
+	if _, ok := reopened.Get("newer"); ok {
+		t.Error("the failed Save's new shard reached disk")
+	}
+}
+
+func TestSaveFsyncFailureCleansUpAndReports(t *testing.T) {
+	// /dev/null takes the write happily and then fails fsync with EINVAL, which
+	// isolates the fsync branch from the encode branch above. fsync is the whole
+	// reason this is a tmp+rename: without a successful flush the rename could
+	// publish a file whose contents are not yet on the platter, so a power loss
+	// straight after a "successful" Save would leave a zero-length state.json.
+	// Bailing here is what keeps that from being reported as success.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	symlinkTmpTo(t, path, "/dev/null")
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Put("a", Shard{Docs: 1})
+	err = st.Save()
+	if err == nil {
+		t.Fatal("Save must report an fsync failure rather than claim success")
+	}
+	if !strings.Contains(err.Error(), "fsync") {
+		t.Errorf("error = %v, want it to name the fsync step (encode succeeded here)", err)
+	}
+	if _, statErr := os.Lstat(path + ".tmp"); !os.IsNotExist(statErr) {
+		t.Errorf("the temp file survived a failed fsync (%v); Save must clean it up", statErr)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Error("Save renamed an unflushed temp file into place")
+	}
+}
+
+// Save's `close tmp` branch is deliberately left uncovered. Reaching it needs
+// close(2) to fail on a regular file whose Sync has ALREADY succeeded — on a
+// local filesystem that combination does not occur, and the devices used above
+// fail Sync first. Covering it would mean adding a seam to state.go, which a
+// coverage change must not do.
+
+func TestSaveRenameFailureIsReported(t *testing.T) {
+	// A non-empty DIRECTORY at the state path: everything up to the rename
+	// succeeds, then rename fails with EISDIR. This is the last step, so it is the
+	// one where "returned nil anyway" would be most convincing and most wrong —
+	// the caller would believe the state was published when the file it wrote is
+	// still sitting under a .tmp name.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "occupant"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Open() would reject the directory; the store under test is constructed
+	// directly so the failure lands on Save's rename rather than earlier.
+	st := &Store{path: path, s: State{Version: 1, Shards: map[string]Shard{"a": {Docs: 1}}}}
+	err := st.Save()
+	if err == nil {
+		t.Fatal("Save must report a failed rename")
+	}
+	if !strings.Contains(err.Error(), "rename") {
+		t.Errorf("error = %v, want it to name the rename step", err)
+	}
+	// ⚠️ CURRENT BEHAVIOUR, pinned rather than endorsed: unlike the encode and
+	// fsync branches, the rename branch does NOT unlink the temp file, so a fully
+	// written <path>.tmp is left behind. Harmless (the next Save truncates it) and
+	// arguably useful for forensics, but recorded here so a future cleanup is a
+	// deliberate choice and TestSaveLeavesNoTempFile's guarantee is understood to
+	// apply to the SUCCESS path only.
+	if _, statErr := os.Stat(path + ".tmp"); statErr != nil {
+		t.Errorf("expected the temp file to be left behind after a failed rename (%v); "+
+			"if Save now cleans it up, this note is stale", statErr)
+	}
+}
+
+func TestOpenRejectsWellFormedJSONOfTheWrongShape(t *testing.T) {
+	// Valid JSON, wrong type for `shards`. Distinct from TestOpenCorruptFileIsAnError,
+	// which feeds syntactically broken bytes: this is the shape a genuine schema
+	// change produces, and it must reach the caller as an error rather than yield a
+	// store with an empty shard map that then re-crawls everything.
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"shards":["not","a","map"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err == nil {
+		t.Fatalf("want an error for a type-mismatched shards field; got %+v", st.Snapshot())
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error = %v, want it to name the offending file so an operator can find it", err)
+	}
+	if st != nil {
+		t.Error("a failed Open must return a nil store")
+	}
 }
