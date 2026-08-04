@@ -30,6 +30,19 @@ func HasRealBuild() bool {
 	if err != nil {
 		return false
 	}
-	entries, err := fs.ReadDir(sub, "assets")
+	return hasRealBuild(sub)
+}
+
+// hasRealBuild is the rule itself, split out from the embedded FS it normally
+// reads so it can be exercised against a stand-in.
+//
+// The seam exists because the committed tree embeds only the placeholder, while
+// the answer that matters most — "a real build IS embedded" — can then only occur
+// on a release machine. Without an injectable FS the false-negative direction is
+// untestable in-tree, and that direction is the expensive one: router.go mounts
+// `GET /` on this result, so a spurious false leaves the production container
+// answering the API normally and 404ing every UI route.
+func hasRealBuild(dist fs.FS) bool {
+	entries, err := fs.ReadDir(dist, "assets")
 	return err == nil && len(entries) > 0
 }
