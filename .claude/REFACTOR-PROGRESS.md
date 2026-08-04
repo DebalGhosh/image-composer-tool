@@ -1,7 +1,12 @@
-# Front-end refactor — progress and handoff
+# Refactor progress and handoff — front end DONE, back end in progress
 
-**State as of the last session.** Read this first; it is written to be the only
-context you need to resume.
+**Read this first; it is written to be the only context you need to resume.**
+
+Two tracks. The **front end is finished and shipped** (`0092aa6c`, allowlist at 12
+by your decision — do not reopen). The **back end is mid-BE-0**: coverage
+groundwork before decomposition, scoped by you to backend packages only. Jump to
+"The back-end track" for the live work; everything above it is reference for the
+completed front-end effort.
 
 ---
 
@@ -325,15 +330,100 @@ A refactor diff must not carry behaviour changes. Each is documented at its site
 
 ---
 
-## The deferred back-end track (BE-1…BE-8)
+## The back-end track — BE-0 in progress (updated 2026-08-04)
 
-Planned in `refactor-react-go-clean-code.md`, never started.
-- **219 functions** exceed the repo's own 50-line limit; `imageos.go` is 2,452
-  lines.
-- The Go coverage gate is **aggregate** and auto-ratchets upward from 69.0.
-- `internal/api` is only **44.2%** covered.
+**Scope narrowed by you: BACKEND ONLY.** `internal/api`, `internal/pkgsvc`,
+`internal/webui`. The CLI (`cmd/`), the image/build engine
+(`internal/image`, `internal/ospackage`, …) and the GitHub workflows are out of
+scope. That reframing matters: the backend is **1,792 statements**, the smallest
+of the three groups, while the aggregate gate is dominated by an 18,064-statement
+image engine nobody asked about.
+
+### BE-0: coverage before decomposition — three commits so far
+
+Rationale: the gate was already failing before any refactor, and a decomposition
+that moves untested code can only lose ground. Testing first also makes the
+decomposition *possible* — `runJenkinsBuild` is a sequence of calls to the eight
+HTTP round-trips, so it was unsplittable until those were pinned.
+
+| Commit | What | Backend |
+|---|---|---|
+| `ddaf77cf` | `internal/api` pure helpers + 2 gate-script bugs | 45.5% → 49.1% |
+| `822ebf25` | `pkgsvc/{schema,state,handler}` from 0% | → 52.3% |
+| `2dbcf746` | the 8 Jenkins HTTP round-trips, 0% → 80-100% | → **58.9%** |
+
+**Backend now 58.9%. 180 statements short of 69%.**
+
+Remaining, worst first: `pkgsvc/crawler` 283 uncovered (29.2%) · `internal/api`
+309 (mostly `handleJenkinsDispatch` + `runJenkinsBuild` itself, both now testable
+because their constituents are pinned) · `pkgsvc/handler` 52 · `pkgsvc/index` 38 ·
+`pkgsvc/seed` 37 at 0% · `pkgsvc/state` 11 · `internal/webui` 6 at 0%.
+
+### ⚠️ The threshold is NOT what the script says
+
+`run_coverage_tests.sh`'s own default is **64.2**, which the tree passes. CI reads
+`.coverage-threshold` (**69.0**) and passes it in — so 69.0 is the real bar. Run
+the gate as `bash scripts/run_coverage_tests.sh 69.0` to see what CI sees.
+
+The shortfall is **pre-existing**: the front-end refactor touched zero `.go` files.
+
+### Two gate-script bugs fixed in `ddaf77cf`
+
+It enumerated directories with `find`, excluding only `vendor` and `.git`:
+- **`node_modules`** — a third-party npm package ships a Go file (160 statements,
+  no tests) counted as project code. Gitignored, untracked, unfixable here.
+- **`.claude/worktrees`** — a registered git worktree holding a **second full copy
+  of this repo at an older commit**. 83 phantom directories, every test binary
+  built twice from two commits, and "unknown test failure" for packages that pass
+  fine. The gate output was unreadable.
+
+### ⚠️ THE MUTATION HARNESS — read before mutation-testing anything
+
+A mutation that silently **no-ops is indistinguishable from one that survives**.
+This bit twice: Go source containing `&&` passed through `python3 -c` inside a bash
+pipeline gets its escaping mangled, so the replacement never applies.
+
+Use `/tmp/mutate.py` (recreate it if `/tmp` was wiped — it is 20 lines): it takes
+the target via heredoc, asserts the string is present **exactly once**, and exits
+nonzero otherwise. Also pass **`-timeout 40s`**: some mutations (e.g. deleting
+`waitForBuild`'s cancelled-check) make the code loop forever, and a hang is not a
+result.
+
+Across the three commits: 15 + 23 + 15 mutations, all eventually caught — but
+three were only caught after fixing real gaps the exercise exposed in my own
+tests.
+
+### Latent defects found while testing — RECORDED, NOT FIXED
+
+A test-coverage commit must not carry behaviour changes.
+- **Nil-index asymmetry.** `handleHealth`/`handleReadyz` guard `s.Idx != nil`;
+  `handleSearch`/`handlePackage`/`handleSuggest` do not, and `index.Get` guards its
+  inner field but not a nil receiver. Unreachable today — `cmd/ict-pkgsvc/main.go`
+  dereferences `idx` before the server is used, so a nil index already crashes at
+  startup.
+- **`trigger`'s `http.StatusFound` branch is dead code.** `http.Client`'s default
+  policy FOLLOWS a 302, so `trigger` never observes one. Proven in
+  `TestTriggerNeverObservesA302`. Invert that test if a `CheckRedirect` is added.
+- **`Store.Get` shares the `Extra` map** — `Shard` is copied by value but the map
+  is shallow, so a caller writing into it mutates the store.
+
+### Still true of the wider Go tree (out of the narrowed scope)
+
+- **213 functions** exceed the repo's own 50-line limit (the plan said 219);
+  `imageos.go` is 2,452 lines. Worst: `rpmutils/ParseRepositoryMetadata` at **326**.
 - Forbidden by repo convention: functional options (there are **zero** `func
   With*`), new singletons, any abstraction with one caller.
+- `internal/api/api_test.go` has a pre-existing `gofmt` violation — not mine, left
+  for its own change.
+
+### GPG
+
+`git commit -S` fails with `Inappropriate ioctl for device` once the agent's cache
+lapses. There is **no `~/.gnupg/gpg-agent.conf`**, so gpg's 600-second idle default
+applies and it recurs every few commits. Remedy: unlock once in a real terminal
+(`echo test | gpg --clearsign --local-user 296E4AE6E1D23544 >/dev/null`), or add
+`default-cache-ttl 28800` / `max-cache-ttl 28800` to that file and
+`gpgconf --kill gpg-agent`. **Never `--no-verify`.**
 
 ---
 
