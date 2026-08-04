@@ -433,6 +433,65 @@ A test-coverage commit must not carry behaviour changes.
   true: the param is accepted, reaches the index, and an offset past the end yields
   an empty page rather than wrapping. **Replace that test when fixing.**
 
+#### Found in the second BE-0 pass (crawler + fetcher), all verified by hand
+
+- **⚠️ One bad dep11 document costs a whole component's enrichment — and the code
+  contradicts its own comment.** `ParseAppStreamDep11`'s comment says *"Log-and-skip
+  is fine"* on the line directly above a `return out, fmt.Errorf(...)`. It aborts on
+  the first decode error, so every component after a malformed one is never decoded.
+  Then `orchestrator.go:325` gates on `if overlay, err := ParseAppStreamDep11(...);
+  err == nil`, which discards even the partial map the function *did* return.
+
+  Measured directly: a stream of 10 good components with one malformed document in
+  the middle returns 6, loses the 4 after it, and the orchestrator throws away all 6.
+  Reachable on every crawl — the dep11 stream comes from a third-party mirror, so any
+  upstream type-mismatch or truncation triggers it. Presents as a single
+  `o.log.Warn("appstream parse")`; the crawl still reports success and ingests, so
+  nothing alerts. Cost is ~50k records/shard with no summaries, categories or
+  screenshots. Fix is `continue` instead of `return` (plus dropping the caller's
+  `err == nil` gate) — a behaviour change, so out of scope here. Pinned by
+  `TestParseAppStreamDep11StopsAtTheFirstBadDocument`.
+
+- **The summary-locale fallback is NONDETERMINISTIC.** With no `C` locale and two or
+  more non-empty translations, the fallback `for _, s := range c.Summary` iterates a
+  Go map, so which language is indexed differs between crawls of byte-identical
+  input. Confirmed live: 400 parses of one input gave 359 German / 41 French. A
+  record's summary flips language between nightly crawls — pure index churn. Pinned
+  safely by `...SummaryFallbackIsOrderIndependent`, which asserts only that the
+  result is one of the candidates and never empty, so it cannot flake.
+
+- **`Screenshots` ignores the `Default` flag its comment describes.** The comment
+  promises "prefer default screenshot's source-image URL when present"; the code
+  always takes every source-image URL and never reads the decoded `Default bool`.
+  Harmless today (the detail pane gets all of them) but the comment would mislead
+  anyone editing it.
+
+- **`decompressByExt`'s `.gz` branch returns PARTIAL bytes alongside its error** on a
+  truncated stream, while the `.xz` branch returns none. Both call sites check `err`
+  first, so it is currently harmless — but a `body, _ := Fetch(...)` refactor would
+  silently index a component missing its tail.
+
+- **`HTTPFetcher.Timeout` is stored and never read.** The deadline comes only from
+  the `http.Client` that `NewHTTPFetcher` builds when passed a nil client. A caller
+  supplying their own client with no timeout gets a fetch with no deadline despite
+  `f.Timeout` being set. Not reachable today — `cmd/ict-pkgsvc/main.go:124` passes
+  nil.
+
+#### On trusting audit reports
+
+Three claims from the adversarial audit pass did NOT survive checking, which is worth
+recording as a method note:
+
+- A reported **flake** in the new appstream suite does not reproduce: 0 failures in
+  60 whole-package runs, 200 targeted runs, and 20 runs under `-race`.
+- Two survivors reported as `real-gap-unfixed` in the index suite (`M6` dropping the
+  fresh-dir stamp, `M21` dropping `Get`'s error check) are both **caught** — the
+  writer agent under-reported its own coverage.
+
+The audit's *fetcher* findings, by contrast, were all real and all confirmed by
+re-running the mutations by hand. Verify each claim before acting on it; a subagent
+report is evidence, not a conclusion.
+
 ### Still true of the wider Go tree (out of the narrowed scope)
 
 - **213 functions** exceed the repo's own 50-line limit (the plan said 219);
