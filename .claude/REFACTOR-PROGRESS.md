@@ -441,7 +441,11 @@ A test-coverage commit must not carry behaviour changes.
   `TestTriggerNeverObservesA302`. Invert that test if a `CheckRedirect` is added.
 - **`Store.Get` shares the `Extra` map** — `Shard` is copied by value but the map
   is shallow, so a caller writing into it mutates the store.
-- **⚠️ `/search` PAGING IS BROKEN — the most serious find of BE-0.**
+- ~~**⚠️ `/search` PAGING IS BROKEN**~~ — **FIXED 2026-08-04.** See §*BE-D: the
+  defects, fixed* below for what the fix actually took (three attempts). Original
+  diagnosis retained because the failure mode is instructive:
+
+  **⚠️ `/search` PAGING WAS BROKEN — the most serious find of BE-0.**
   `index.Search` asks Bleve for `Limit*4` hits **starting at `Offset`**, then
   re-sorts *that window* locally (popularity tiebreak + DocID) and truncates to
   `Limit`. The local ordering is therefore computed over a window that itself slid,
@@ -510,6 +514,94 @@ A test-coverage commit must not carry behaviour changes.
   supplying their own client with no timeout gets a fetch with no deadline despite
   `f.Timeout` being set. Not reachable today — `cmd/ict-pkgsvc/main.go:124` passes
   nil.
+
+## BE-D: the defects, fixed (2026-08-04)
+
+Five of the six recorded defects are now fixed, each with a test that fails if the
+fix is reverted (verified by actually reverting it). Every fix is a behaviour change,
+which is why they are here and not in the coverage commits.
+
+### 1. `/search` paging — took THREE attempts, and the first two looked right
+
+The bug: `index.Search` asked Bleve for a `Limit*4` window starting **at** `Offset`,
+then re-sorted that window locally. The local ordering was a function of *where the
+window started*, so pages could not partition the result set.
+
+What the fix required, and why the obvious versions failed:
+
+| attempt | window | result |
+|---|---|---|
+| original | `Limit*4` from `Offset` | 3 of 8 records reachable at `limit=2` |
+| #1 | `(Offset+Limit)*4` from 0 | correct ≤60 records, **broken at 250+** — the pool still grew with depth |
+| #2 | as #1, floor 200 | correct <200, broken above; same reason |
+| **#3** | **fixed 1000 from 0** | **correct at every (offset, limit) tested** |
+
+The insight both early attempts missed: it is not enough for the window to *contain*
+the page. The candidate pool must be **identical for every page of the same query**,
+because the local re-sort ranks whatever is in it. Any pool derived from `Offset` —
+even one guaranteed to reach the page — sorts a different set per page.
+
+Verified 16/16 combinations (corpus 8/60/250/900 × limit 1/2/25/100): every record
+reachable exactly once, no duplicates, no gaps.
+
+**The tradeoff, stated plainly:** `maxCandidates = 1000` bounds reachable depth. An
+offset ≥1000 returns an empty page even when `total` is larger. That is a deliberate
+choice over silently-wrong pages, and it is 10 full pages at the handler's `limit`
+cap of 100. `total` still reports the true match count.
+
+### 2. dep11 parse abort — one bad document no longer costs a whole suite
+
+`ParseAppStreamDep11` now skips a document that fails to fit the struct
+(`yaml.TypeError`) and continues, instead of returning. A stream-level failure is
+still fatal — there is nothing to continue *to*.
+
+Two supporting changes were needed for the fix to actually help:
+- **`ErrDep11PartialParse`**, a sentinel, so "partly broken" is distinguishable from
+  "unreadable". Silence was not an option: a mirror publishing malformed dep11 would
+  look identical to a clean crawl.
+- **`orchestrator.go`'s gate**, which used `err == nil` and so discarded even the
+  partial map. It now applies the overlay when the error is `ErrDep11PartialParse`
+  and warns either way.
+
+Measured: 50 components with one malformed document went from **25 surviving (then
+all 25 discarded)** to **49 applied**.
+
+### 3. Summary locale nondeterminism
+
+The fallback ranged a Go map, so a component with no `C` locale indexed a different
+language per crawl (359 German / 41 French over 400 parses). Now walks sorted keys
+via `sortedValues`. Which locale wins is still arbitrary — `de` beats `fr`
+alphabetically — but it is *stable*, which is the property that matters.
+
+⚠️ Note for the test: `sort.Strings` is bytewise, so **every lowercase tag sorts
+after uppercase `C`**. A fixture using `ar`/`de` cannot prove the C-preference
+survived the change; it needs an uppercase-initial tag like `AR`. I got this wrong
+first time and the assertion passed for the wrong reason.
+
+### 4. `HTTPFetcher.Timeout` was stored and never read
+
+The deadline came only from the client `NewHTTPFetcher` builds when passed nil, so a
+caller supplying their own client — the documented reason the parameter exists — got
+a fetch with **no deadline**. `Fetch` now derives a per-request context from
+`f.Timeout`. Reverting the fix makes the suite hang until the 100s test timeout,
+which is the defect in miniature: a stalled mirror pinning a refresh goroutine
+forever.
+
+`Timeout <= 0` still means unbounded, not already-expired.
+
+### 5. `decompressByExt` leaked partial bytes on the `.gz` path
+
+`io.ReadAll` returns what it decoded alongside its error, so a truncated gzip came
+back as "135 valid bytes plus unexpected EOF" while `.xz` returned none. Both now
+fail closed. Nothing was broken — both callers check `err` first — but the asymmetry
+meant a future `body, _ := Fetch(...)` would index a Packages file missing its tail,
+and those packages simply vanish from search after the atomic swap.
+
+### Still NOT fixed
+
+- **`Screenshots` ignores the `Default` flag its comment describes.** Cosmetic: the
+  detail pane gets every screenshot instead of the hero image. Fixing it changes what
+  users see, so it wants a UI decision rather than a unilateral change.
 
 #### On trusting audit reports
 
