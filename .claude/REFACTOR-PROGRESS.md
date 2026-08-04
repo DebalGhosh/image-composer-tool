@@ -30,37 +30,26 @@ allowlist as unfinished work unless you decide to reopen scope.
 
 ---
 
-## ⚠️ BLOCKED: the commit is staged but not committed
+## ✅ SHIPPED — commit `0092aa6c`
 
-Everything is staged on branch **`refactor/frontend-decomposition`** (194 files,
-+20,877 / −7,504). `git commit -S` **failed**:
+The work is committed and pushed. `main == origin/main` on the fork
+(`DebalGhosh/image-composer-tool`); `upstream` (`open-edge-platform`) is untouched
+and the commit is confirmed not to be on it.
 
-```
-gpg: signing failed: Inappropriate ioctl for device
-```
+- **`0092aa6c`** `refactor(web): decompose the four god components into features/`
+- Signed and verified: `%G? = G`, key `296E4AE6E1D23544`
+- 195 files, +21,278 / −7,504
 
-The key `296E4AE6E1D23544` exists and is valid, but its passphrase is not cached
-and gpg cannot prompt from the agent's non-interactive shell. The repo config has
-`commit.gpgsign=true` and the standing instruction is **never bypass signing** —
-so this needs a human.
+GPG signing initially failed with `Inappropriate ioctl for device` — the key was
+valid but its passphrase was not cached, and gpg cannot prompt from a
+non-interactive shell. Fixed by unlocking it once in a real terminal
+(`export GPG_TTY=$(tty)` then any `gpg --clearsign`); signing then worked from the
+agent's shell too. **If this recurs after a reboot, that is the remedy — never
+`--no-verify`.**
 
-**To unblock, run in your own terminal:**
-
-```bash
-cd /home/debalgho/ICTT/image-composer-tool
-echo test | gpg --clearsign --local-user 296E4AE6E1D23544 > /dev/null   # enter passphrase
-git commit -S -F /tmp/commitmsg.txt     # message is already written
-git push -u origin refactor/frontend-decomposition
-```
-
-`/tmp/commitmsg.txt` may be gone after a reboot — the full message is reproduced
-at the end of this file.
-
-**Push target, confirmed with you mid-session: `origin` (the
-`DebalGhosh/image-composer-tool` fork), branch `main` is the eventual
-destination.** Never push to `upstream` (`open-edge-platform`). The work is on a
-branch rather than committed straight to `main` per the repo convention; merge or
-fast-forward into the fork's `main` as you prefer.
+The scratch branch `refactor/frontend-decomposition` was fast-forwarded into `main`
+and deleted. `/tmp/commitmsg.txt` is not needed any more, but the full message is
+still reproduced at the end of this file for reference.
 
 ---
 
@@ -219,11 +208,22 @@ grep -ro 'var(--[a-z0-9-]*)' src --include='*.tsx' | grep -v '\.test\.' \
 cd .. && go build ./...          # internal/webui embeds dist
 ```
 
-⚠️ The CSS baseline lives in `/tmp`, which **the reboot wiped**. Do not rebuild it
-from `HEAD` — HEAD emits **533** selectors because the chip work and everything
-after it is in this uncommitted branch. Rebuild it from this branch's build
-output, and note that I briefly `git stash`ed the working tree trying to do this
-the wrong way (recovered with `stash pop`, nothing lost — but don't repeat it).
+### On the CSS baseline (corrected 2026-08-04)
+
+`/tmp/fe2/css-baseline-542.txt` **survived the reboot** and was re-verified against
+a fresh build from `0092aa6c`: 542 selectors, 41,728 B, content hash
+`index-C7ZYkEzU.css` — an exact match, including the hash. It is trustworthy.
+
+The earlier warning in this file said "`/tmp` was wiped; do not rebuild from HEAD,
+HEAD emits 533". Both halves are now obsolete: the file is present, **and** HEAD is
+the refactor commit, so rebuilding from HEAD would give 542 anyway. The 533 figure
+belonged to the pre-refactor HEAD when the work was still uncommitted.
+
+If it ever does need rebuilding, build into a **scratch dir**
+(`npx vite build --outDir /tmp/verify-dist --emptyOutDir`) so neither `dist/` nor
+the baseline is overwritten while comparing. Do **not** `git stash` to get a
+"clean" tree for this — I tried that once, and it reverted the whole uncommitted
+refactor (recovered with `stash pop`, nothing lost).
 
 **Then restart the dev server and verify the module graph transforms clean**
 (~147 modules, 0 problems) — `:5176`, `VITE_API_TARGET=http://localhost:8083`,
@@ -298,9 +298,25 @@ A refactor diff must not carry behaviour changes. Each is documented at its site
 
 ## Also pending, unrelated to the refactor
 
-- **Rebuild + restart the `:8083` backend** so the ARTIFACTS section shows the
-  published image. The running binary predates the publish-scraper commit; that
-  is the whole reason artifacts looked missing. You said "we'll do it tomorrow".
+- ~~**Rebuild + restart the `:8083` backend**~~ — **DONE 2026-08-04.** The reboot
+  had killed it outright (no listener, no process, no binary), so this was "build
+  and start", not "rebuild to pick up the scraper". Verified: the scraper is
+  compiled into the running binary, its tests pass, and the binary (Aug 4 08:31)
+  is newer than the scraper source (Aug 2 22:25) — the exact inversion that caused
+  the empty-ARTIFACTS symptom. `/api/v1/manifest` answers 200 and `:5176` proxies
+  to it.
+
+  ⚠️ **The artifact path itself is still unverified end-to-end.** The build tracker
+  is in-memory, so the reboot cleared it — `/api/v1/builds/<id>/details` 404s for
+  every historical build and there is nothing to query. It can only be confirmed on
+  the next real dispatch. Do not record it as verified before then.
+
+  To start it: `go build -o /tmp/ict-serve ./cmd/image-composer-tool`, then
+  `set -a; . /home/debalgho/ICTT/.env.jenkins; set +a` and
+  `/tmp/ict-serve serve --port 8083`. The `--port` flag defaults to **8080**
+  (`cmd/image-composer-tool/serve.go:59`), so 8083 must be passed explicitly. The
+  env file (mode 600) supplies `JENKINS_URL` / `JENKINS_USER` / `JENKINS_TOKEN`;
+  **never echo, log, or commit their values.**
 - Tasks #9, #10 (pkgsvc crawler enablement, sub-minimum query affordance) and
   #22–#25 (pane collapse, density tokens, remaining responsive fixes).
 - `internal/pkgsvc/index/zz_fp_test.go` is an untracked debug probe of mine

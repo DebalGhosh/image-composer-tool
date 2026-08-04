@@ -127,10 +127,26 @@ fi
 echo ""
 
 # Find all directories with Go files (including those without tests)
-ALL_GO_DIRS=$(find . -name "*.go" -type f | sed 's|/[^/]*$||' | sort -u | grep -v vendor | grep -v ".git" || true)
+#
+# TWO EXCLUSIONS BEYOND vendor/.git, both added after this script was observed
+# counting code that is not ours:
+#
+#   node_modules — THIRD-PARTY npm content. `web/node_modules/flatted/golang/pkg/
+#   flatted` ships a Go file (160 statements, no tests) that was being counted as
+#   project code. It is gitignored via web/.gitignore and untracked, so it can be
+#   neither tested nor fixed here, and it was depressing the aggregate by ~0.5
+#   points against a threshold this repo is expected to meet with its OWN code.
+#
+#   .claude/worktrees — a registered git worktree holding a SECOND FULL COPY of
+#   this repo at an older commit. `git worktree list` shows it; it is untracked
+#   and not gitignored. Scanning it added 83 phantom directories, double-counted
+#   every package, and reported "unknown test failure" for packages that pass
+#   perfectly well in the real tree — because the same test binaries were being
+#   built twice from two different commits. That made the whole gate unreadable.
+ALL_GO_DIRS=$(find . -name "*.go" -type f | sed 's|/[^/]*$||' | sort -u | grep -v vendor | grep -v node_modules | grep -v ".claude/worktrees" | grep -v ".git" || true)
 
 # Find directories with test files
-TEST_DIRS=$(find . -name "*_test.go" -type f | sed 's|/[^/]*$||' | sort -u | grep -v vendor | grep -v ".git" || true)
+TEST_DIRS=$(find . -name "*_test.go" -type f | sed 's|/[^/]*$||' | sort -u | grep -v vendor | grep -v node_modules | grep -v ".claude/worktrees" | grep -v ".git" || true)
 
 if [[ -z "${ALL_GO_DIRS}" ]]; then
     echo -e "${RED}ERROR: No Go directories found${NC}"
