@@ -297,7 +297,8 @@ A refactor diff must not carry behaviour changes. Each is documented at its site
 - **`os={draft.target.dist}`** — prop named `os`, fed the dist.
 - `patch*` helpers close over `draft`/`setDraft`, so a React-free `model/patch.ts`
   is not a straight move.
-- `internal/pkgsvc/handler` has zero tests.
+- ~~`internal/pkgsvc/handler` has zero tests.~~ **Fixed in BE-0** — 0% → **94.5%**
+  across `search_test.go` and `search_routes_test.go`.
 
 ---
 
@@ -406,6 +407,31 @@ A test-coverage commit must not carry behaviour changes.
   `TestTriggerNeverObservesA302`. Invert that test if a `CheckRedirect` is added.
 - **`Store.Get` shares the `Extra` map** — `Shard` is copied by value but the map
   is shallow, so a caller writing into it mutates the store.
+- **⚠️ `/search` PAGING IS BROKEN — the most serious find of BE-0.**
+  `index.Search` asks Bleve for `Limit*4` hits **starting at `Offset`**, then
+  re-sorts *that window* locally (popularity tiebreak + DocID) and truncates to
+  `Limit`. The local ordering is therefore computed over a window that itself slid,
+  so page boundaries cannot line up. Measured on 8 equal-scoring records:
+
+  | limit | records ever reachable | pages that overlap |
+  |-------|------------------------|--------------------|
+  | 1     | 5 of 8                 | one record repeats across 4 consecutive pages |
+  | 2     | **3 of 8**             | 2 duplicated |
+  | 4     | 5 of 8                 | 3 duplicated |
+
+  **Reachable from the public API.** `internal/api/handlers_packages.go`'s proxy
+  Director preserves the caller's query string, so `offset` passes through from
+  `/api/v1/packages` to `/search` unchanged. It has not bitten because the current
+  UI never sends it — `PackageSearchCombobox` fetches a single page.
+
+  **The fix** (its own commit): request `Offset+Limit*4` from Bleve starting at **0**,
+  sort, *then* slice `[Offset : Offset+Limit]`. That makes the local ordering total
+  rather than per-window, which is the property paging requires.
+
+  Characterised — not asserted-as-desired — by
+  `TestSearchOffsetIsAcceptedAndShiftsTheWindow`, which pins only what is currently
+  true: the param is accepted, reaches the index, and an offset past the end yields
+  an empty page rather than wrapping. **Replace that test when fixing.**
 
 ### Still true of the wider Go tree (out of the narrowed scope)
 
