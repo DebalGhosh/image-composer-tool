@@ -4,6 +4,7 @@
 package crawler
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -362,27 +363,49 @@ func TestParseAppStreamDep11FallbackSkipsBlankLocalesDeterministically(t *testin
 	}
 }
 
-func TestParseAppStreamDep11SummaryFallbackIsOrderIndependent(t *testing.T) {
-	// ⚠️ A NONDETERMINISM, pinned rather than endorsed.
+func TestParseAppStreamDep11SummaryFallbackIsDeterministic(t *testing.T) {
+	// This test previously tolerated a nondeterminism instead of asserting against
+	// it. With no "C" locale and two or more non-empty translations, the fallback
+	// ranged over a Go map, so WHICH translation got indexed differed between crawls
+	// of byte-identical input — measured at 359 German / 41 French over 400 parses.
+	// A record's summary flipped language for no reason, and every crawl rewrote
+	// documents that had not changed.
 	//
-	// With no "C" locale and two or more non-empty translations, the fallback loop
-	// ranges over a map, so WHICH translation is indexed differs between crawls of
-	// byte-identical input. This test asserts only what is actually guaranteed —
-	// that the result is one of the candidates and never empty — so it cannot flake.
+	// The fallback now walks locale keys in sorted order. Which locale wins is still
+	// arbitrary — "de" beats "fr" only alphabetically — but it is arbitrary and
+	// STABLE, which is the property that matters.
 	//
-	// How it would present: a record's summary flips language between nightly
-	// crawls. Nobody notices except as index churn.
+	// Asserting an exact value is what makes this test meaningful: the old
+	// "one of the candidates" form passed under both behaviours.
 	const doc = "---\nPackage: p\nSummary:\n  de: Deutsch\n  fr: Francais\n"
-	seen := map[string]bool{}
-	for i := 0; i < 50; i++ {
-		got := mustParse(t, doc)["p"].Summary
-		if got != "Deutsch" && got != "Francais" {
-			t.Fatalf("Summary = %q, want one of the two translations", got)
+	for i := range 50 {
+		if got := mustParse(t, doc)["p"].Summary; got != "Deutsch" {
+			t.Fatalf("parse %d: Summary = %q, want %q — the lowest-sorted locale must "+
+				"win every time", i, got, "Deutsch")
 		}
-		seen[got] = true
 	}
-	t.Logf("locales observed across 50 parses: %v (>1 means the map-order "+
-		"nondeterminism is live)", seen)
+
+	// Insertion order in the YAML must not matter either, only key order.
+	const reversed = "---\nPackage: p\nSummary:\n  fr: Francais\n  de: Deutsch\n"
+	if got := mustParse(t, reversed)["p"].Summary; got != "Deutsch" {
+		t.Errorf("with the locales written in the other order, Summary = %q, want %q; "+
+			"the choice must depend on the key, not on document order", got, "Deutsch")
+	}
+
+	// And "C" still outranks the sort when present — the sorted walk is only the
+	// FALLBACK, not a replacement for the English preference.
+	//
+	// The locale here has to sort BEFORE "C" for this to prove anything, and that is
+	// narrower than it looks: sort.Strings is bytewise, so every lowercase tag
+	// ("ar", "de") sorts AFTER uppercase "C" and would pass under either rule. Only
+	// an uppercase-initial tag earlier than C — dep11 writes territory variants like
+	// "AR" — actually distinguishes them.
+	const withC = "---\nPackage: p\nSummary:\n  AR: Arabic\n  C: English\n"
+	if got := mustParse(t, withC)["p"].Summary; got != "English" {
+		t.Errorf("Summary = %q, want %q: the C locale must beat a locale that sorts "+
+			"before it, or the sorted fallback has replaced the English preference",
+			got, "English")
+	}
 }
 
 func TestParseAppStreamDep11UnionsKeywordsAcrossLocales(t *testing.T) {
@@ -644,31 +667,34 @@ func TestParseAppStreamDep11MalformedDocumentsDoNotPanic(t *testing.T) {
 				t.Error("out = nil even on the error path; the partial map must " +
 					"always be returned so the caller can choose to use it")
 			}
-			if err != nil && !strings.Contains(err.Error(), "dep11 decode") {
-				t.Errorf("err = %v, want it wrapped with the dep11 decode context so "+
-					"the orchestrator's warn line names the right stage", err)
+			// The message must name the stage so the orchestrator's warn line is
+			// actionable. Either wording qualifies: a per-document type error is now
+			// SKIPPED and reported as a partial parse, while a stream-level failure
+			// still carries the "dep11 decode" context.
+			if err != nil {
+				msg := err.Error()
+				if !strings.Contains(msg, "dep11 decode") && !errors.Is(err, ErrDep11PartialParse) {
+					t.Errorf("err = %v, want either the dep11 decode context or the "+
+						"ErrDep11PartialParse sentinel so the warn line names the stage", err)
+				}
 			}
 		})
 	}
 }
 
-func TestParseAppStreamDep11StopsAtTheFirstBadDocument(t *testing.T) {
-	// ⚠️ A REAL LIMITATION, pinned rather than endorsed. NOT fixed here: this file
-	// may only add tests.
+func TestParseAppStreamDep11SkipsOneBadDocumentAndKeepsGoing(t *testing.T) {
+	// THE FIX. This test previously pinned the opposite behaviour: the parser
+	// RETURNED on the first decode error, so every component after a malformed one
+	// was never seen, and the orchestrator's `err == nil` gate then discarded even
+	// the partial map. One upstream typo cost a whole component its AppStream
+	// enrichment — no summaries, no category facets, no screenshots for ~50k
+	// records, visible only as a single warn line.
 	//
-	// The doc comment on ParseAppStreamDep11 says a bad document is "log-and-skip".
-	// It is not: the decode error RETURNS, so every component after the bad one is
-	// never seen. Worse, the orchestrator gates on the error
-	// (orchestrator.go:325 — `if overlay, err := ParseAppStreamDep11(asBody); err ==
-	// nil`), so the partial map this function does return is discarded outright.
+	// Now a document that does not fit the struct is skipped and the stream
+	// continues, so exactly one component is lost instead of all of them.
 	//
-	// Net effect on a real crawl: ONE malformed document anywhere in a ~50k-record
-	// component stream costs the AppStream enrichment for the ENTIRE component. It
-	// presents as a single warn line and search results that are quietly poorer —
-	// no summaries, no category facets, no screenshots.
-	//
-	// The corpus below is deliberately larger than the number of surviving records
-	// so "everything landed" and "the abort is real" cannot both pass.
+	// The corpus is deliberately larger than the loss so "everything landed" and
+	// "the skip is real" cannot both pass.
 	const total, badAt = 50, 25
 	var b strings.Builder
 	b.WriteString("File: DEP-11\nOrigin: example-noble-main\n")
@@ -683,35 +709,79 @@ func TestParseAppStreamDep11StopsAtTheFirstBadDocument(t *testing.T) {
 	}
 
 	out, err := ParseAppStreamDep11([]byte(b.String()))
+
+	// A partial parse still reports itself — silence would make a mirror publishing
+	// malformed dep11 indistinguishable from a clean crawl.
 	if err == nil {
-		t.Fatal("err = nil, want the decode error — if this now passes, the parser " +
-			"learned to skip bad documents and this whole note is stale (good news)")
+		t.Fatal("err = nil; a skipped document must still be reported so the crawl " +
+			"logs it")
+	}
+	if !errors.Is(err, ErrDep11PartialParse) {
+		t.Errorf("errors.Is(err, ErrDep11PartialParse) = false; err = %v. The "+
+			"orchestrator keys on this sentinel to decide the overlay is still "+
+			"usable, so a plain error here would throw the whole map away again", err)
 	}
 
-	// Everything BEFORE the bad document survived in the returned map...
-	if len(out) != badAt {
-		t.Errorf("overlay has %d entries, want %d (the components before the bad "+
-			"document at index %d)", len(out), badAt, badAt)
+	// Only the malformed document is lost. This is the assertion that would have
+	// failed before the fix, when 25 of 50 were dropped.
+	if len(out) != total-1 {
+		t.Errorf("overlay has %d entries, want %d (everything but the one malformed "+
+			"document)", len(out), total-1)
 	}
-	if len(out) >= total {
-		t.Errorf("overlay has %d of %d entries; the corpus must be larger than the "+
-			"survivor count for this test to distinguish abort from success",
-			len(out), total)
-	}
-	if got := out["pkg-00"].Summary; got != "package 00" {
-		t.Errorf("pkg-00 Summary = %q, want the first component fully parsed", got)
-	}
-	if got := out[fmt.Sprintf("pkg-%02d", badAt-1)].Summary; got == "" {
-		t.Errorf("pkg-%02d is missing; every component before the bad document must "+
-			"still land", badAt-1)
-	}
-	// ...and everything at or after it is lost.
 	if _, ok := out[fmt.Sprintf("pkg-%02d", badAt)]; ok {
 		t.Errorf("pkg-%02d landed, but its document is the malformed one", badAt)
 	}
-	if _, ok := out[fmt.Sprintf("pkg-%02d", total-1)]; ok {
-		t.Errorf("pkg-%02d landed; the parser is expected to stop at the bad "+
-			"document, so trailing components cannot be present", total-1)
+	// Components on BOTH sides of the bad document must be present — the trailing
+	// half is what the old behaviour lost.
+	for _, i := range []int{0, badAt - 1, badAt + 1, total - 1} {
+		name := fmt.Sprintf("pkg-%02d", i)
+		if got := out[name].Summary; got != fmt.Sprintf("package %02d", i) {
+			t.Errorf("%s Summary = %q, want it parsed; components after the bad "+
+				"document must survive", name, got)
+		}
+	}
+}
+
+func TestParseAppStreamDep11ReportsHowMuchItSkipped(t *testing.T) {
+	// The error text is what lands in the crawl log, so it has to say enough for an
+	// operator to judge severity: one bad document in a healthy stream is noise,
+	// while thousands means the mirror changed format and the enrichment is
+	// effectively gone.
+	var b strings.Builder
+	b.WriteString("File: DEP-11\n")
+	for i := range 4 {
+		fmt.Fprintf(&b, "---\nPackage: bad-%d\nCategories: not-a-list\n", i)
+	}
+	fmt.Fprintf(&b, "---\nPackage: good\nSummary:\n  C: fine\n")
+
+	out, err := ParseAppStreamDep11([]byte(b.String()))
+	if err == nil {
+		t.Fatal("err = nil, want a partial-parse report")
+	}
+	if len(out) != 1 {
+		t.Fatalf("overlay has %d entries, want 1 (only the good component)", len(out))
+	}
+	// Both numbers, so the ratio is legible.
+	for _, want := range []string{"4 document(s) skipped", "1 component(s) parsed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestParseAppStreamDep11StillFailsOnAnUnreadableStream(t *testing.T) {
+	// The skip is scoped to yaml.TypeError — one document not fitting the struct.
+	// A stream that is not parseable YAML at all is a different failure: there is
+	// nothing to skip to, so it must still be fatal rather than silently yielding an
+	// empty overlay that the orchestrator would happily apply.
+	broken := []byte("File: DEP-11\n---\nPackage: p\n  bad: [indentation\n\t\ttabs\n")
+	out, err := ParseAppStreamDep11(broken)
+	if err == nil {
+		t.Fatalf("err = nil for unparseable YAML; got %d entries", len(out))
+	}
+	if errors.Is(err, ErrDep11PartialParse) {
+		t.Error("a syntactically broken stream was reported as a PARTIAL parse; the " +
+			"orchestrator would then apply the overlay from a stream it could not read")
 	}
 }
 

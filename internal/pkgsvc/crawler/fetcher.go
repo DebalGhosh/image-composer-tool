@@ -69,6 +69,17 @@ var ErrChecksumMismatch = errors.New("fetcher: SHA256 checksum mismatch")
 //     decompress in memory.
 //   - Non-2xx responses become errors carrying the status code.
 func (f *HTTPFetcher) Fetch(ctx context.Context, url, checksum string) ([]byte, error) {
+	// Enforce Timeout on the REQUEST rather than relying on the client's own.
+	// NewHTTPFetcher only sets a client timeout when it builds the client itself, so
+	// a caller passing their own client (for a proxy or TLS pinning) previously got a
+	// fetch with NO deadline even though f.Timeout was set — a stalled mirror would
+	// hold a refresh goroutine forever and the index would quietly stop updating.
+	if f.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, f.Timeout)
+		defer cancel()
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -106,20 +117,36 @@ func (f *HTTPFetcher) Fetch(ctx context.Context, url, checksum string) ([]byte, 
 // Kept URL-based (rather than sniffing magic bytes) so tests can force a
 // specific decoder path by naming the fixture file.
 func decompressByExt(url string, body []byte) ([]byte, error) {
+	// readAll discards whatever was decoded when the stream fails.
+	//
+	// io.ReadAll returns the bytes it managed to read ALONGSIDE the error, so a
+	// truncated .gz used to come back as "135 valid bytes plus unexpected EOF".
+	// Both current call sites check err first, but that made the contract "bytes
+	// plus error" on one path and "no bytes" on the other, and a future
+	// `body, _ := Fetch(...)` would silently index a Packages file missing its
+	// tail — those packages just vanish from search after the atomic swap.
+	// Failing closed is the only safe shape for partially-decoded repository data.
+	readAll := func(r io.Reader, kind string) ([]byte, error) {
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("%s read %s: %w", kind, url, err)
+		}
+		return out, nil
+	}
 	switch {
 	case strings.HasSuffix(url, ".xz"):
 		r, err := xz.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("xz open %s: %w", url, err)
 		}
-		return io.ReadAll(r)
+		return readAll(r, "xz")
 	case strings.HasSuffix(url, ".gz"):
 		r, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("gzip open %s: %w", url, err)
 		}
 		defer r.Close()
-		return io.ReadAll(r)
+		return readAll(r, "gzip")
 	default:
 		return body, nil
 	}

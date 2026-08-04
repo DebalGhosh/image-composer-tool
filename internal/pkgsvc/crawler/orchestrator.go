@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -322,11 +323,16 @@ func (o *Orchestrator) refreshOne(ctx context.Context, src Source) error {
 			asURL := fmt.Sprintf("%s/dists/%s/%s",
 				trimSlash(src.MirrorBase), src.Release, asRel)
 			if asBody, err := o.fetcher.Fetch(ctx, asURL, asHash); err == nil {
-				if overlay, err := ParseAppStreamDep11(asBody); err == nil {
+				overlay, err := ParseAppStreamDep11(asBody)
+				// A PARTIAL parse still yields a usable overlay, so apply it and warn.
+				// The old `err == nil` gate threw the whole map away on any error, which
+				// meant one malformed upstream document cost this component every
+				// summary, category and screenshot it had.
+				if err != nil {
+					o.log.Warn("appstream parse", "url", asURL, "err", err.Error())
+				}
+				if err == nil || errors.Is(err, ErrDep11PartialParse) {
 					ApplyAppStream(records, overlay)
-				} else {
-					o.log.Warn("appstream parse",
-						"url", asURL, "err", err.Error())
 				}
 			} else {
 				o.log.Warn("appstream fetch",

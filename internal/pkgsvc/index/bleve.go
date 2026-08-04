@@ -552,7 +552,42 @@ func (i *Index) Search(opts SearchOpts) ([]SearchHit, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	req := bleve.NewSearchRequestOptions(q, opts.Limit*4, opts.Offset, false)
+	// Fetch from offset 0, NOT from opts.Offset, and take a window big enough to
+	// contain the requested page.
+	//
+	// The re-score below reorders hits locally (popularity tiebreak, then DocID).
+	// Asking Bleve to skip Offset first and re-sorting only what came back made the
+	// local ordering a function of where the window happened to start, so
+	// consecutive pages overlapped and some records were unreachable at every
+	// offset: on 8 equal-scoring records with limit=2, only 3 were ever returned.
+	// Sorting a candidate set that always starts at rank 0 makes the ordering
+	// total, which is what paging requires.
+	//
+	// A FIXED candidate pool, independent of both Offset and Limit. This is the
+	// property that makes paging consistent, and it is subtler than it looks.
+	//
+	// The re-score below reorders hits locally (popularity tiebreak, then DocID), so
+	// the returned order is a function of WHICH CANDIDATES ARE IN THE POOL. If the
+	// pool varies between requests — because it was derived from Offset, or from
+	// Limit — then two pages of the same query sort two different sets and the
+	// result is neither a partition nor stable: consecutive pages overlap and some
+	// records are unreachable at every offset.
+	//
+	// Three variants were measured on equal-scoring corpora before settling here.
+	// Bleve-side offset with a Limit*4 window (the original) reached 3 of 8 records
+	// at limit=2. A (Offset+Limit)*4 window fixed small corpora but still broke at
+	// 250+ records, because the pool grew as the reader paged deeper. Only a
+	// constant pool is correct for every (offset, limit) pair.
+	//
+	// maxCandidates bounds the cost: every query collects at most this many hits
+	// with their stored fields. It also bounds the reachable depth — an offset at or
+	// beyond it yields an empty page even when `total` is larger. That is a real
+	// limit, deliberately chosen over silently wrong pages, and it is far past
+	// anything the UI does: the handler caps limit at 100, so this is 10 full pages.
+	// `total` remains the true pre-pool match count so a caller can still see there
+	// is more.
+	const maxCandidates = 1000
+	req := bleve.NewSearchRequestOptions(q, maxCandidates, 0, false)
 	req.Fields = []string{"popularity.inst", FieldRaw}
 	res, err := i.idx.Search(req)
 	if err != nil {
@@ -607,9 +642,18 @@ func (i *Index) Search(opts SearchOpts) ([]SearchHit, int, error) {
 		return tie[a].id < tie[b].id
 	})
 
-	// Cap to Limit after the re-sort.
-	if len(tie) > opts.Limit {
-		tie = tie[:opts.Limit]
+	// Slice out the requested page AFTER the re-sort. Bleve was asked to start at
+	// rank 0, so the offset is applied here — on a total ordering — rather than
+	// upstream on a per-window one.
+	//
+	// An offset past the end yields an empty page rather than wrapping or panicking.
+	if opts.Offset >= len(tie) {
+		tie = nil
+	} else {
+		tie = tie[opts.Offset:]
+		if len(tie) > opts.Limit {
+			tie = tie[:opts.Limit]
+		}
 	}
 	hits := make([]SearchHit, 0, len(tie))
 	for _, t := range tie {

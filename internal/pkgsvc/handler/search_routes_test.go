@@ -397,41 +397,67 @@ func TestSearchLimitCapsTheReturnedPageButNotTheTotal(t *testing.T) {
 	}
 }
 
-func TestSearchOffsetIsAcceptedAndShiftsTheWindow(t *testing.T) {
-	// ⚠️ PAGING IS BROKEN, and this test characterises it rather than asserting the
-	// behaviour anyone would want. Written after a test that DID assert what you
-	// would want ("offset=0 and offset=1 return different records") failed against
-	// the real index.
+func TestSearchPagingPartitionsTheResultSet(t *testing.T) {
+	// PAGING IS NOW CORRECT, and this test replaces one that characterised it while
+	// broken. The old defect: index.Search asked Bleve for a `Limit*4` window
+	// starting AT `Offset`, then re-sorted THAT window locally (popularity tiebreak
+	// + DocID). The local ordering was therefore a function of where the window
+	// happened to start, so page boundaries could not line up — on 8 equal-scoring
+	// records at limit=2, only 3 were ever returned at any offset.
 	//
-	// THE DEFECT. index.Search asks Bleve for `Limit*4` hits starting AT `Offset`,
-	// then re-sorts THAT WINDOW locally (popularity tiebreak + DocID) and truncates
-	// to `Limit`. So the local ordering is computed over a window that itself slid,
-	// and page boundaries cannot line up: consecutive pages overlap, and some
-	// records are unreachable at every offset.
+	// The fix collects a FIXED candidate pool from rank 0 and slices the page out
+	// after sorting, which makes the ordering total rather than per-window.
 	//
-	// Measured on 8 equal-scoring records:
-	//   limit=1: 5 of 8 records ever appear, one repeats across 4 consecutive pages
-	//   limit=2: 3 of 8 records ever appear
-	//   limit=4: 5 of 8 records ever appear
-	//
-	// REACHABLE FROM THE PUBLIC API: internal/api/handlers_packages.go's proxy
-	// Director preserves the caller's query string, so `offset` passes through from
-	// /api/v1/packages to /search unchanged. The current UI never sends it — the
-	// combobox fetches one page — which is why this has not bitten yet.
-	//
-	// The fix (for its own commit, NOT this one): re-sort over an offset-independent
-	// candidate window — request `Offset+Limit*4` from Bleve starting at 0, sort,
-	// THEN slice [Offset : Offset+Limit]. That makes the local ordering total rather
-	// than per-window, which is the property paging needs.
-	//
-	// Until then this pins what IS true: the parameter is accepted, is passed
-	// through to the index, and shifts the window rather than being ignored
-	// outright. Recorded in .claude/REFACTOR-PROGRESS.md under latent defects.
+	// The property asserted here is the one paging actually needs, and it is
+	// stronger than "consecutive pages differ": walking every page must yield each
+	// record EXACTLY ONCE — a partition, no duplicates and no gaps. Reachable from
+	// the public API, since the proxy Director forwards `offset` verbatim from
+	// /api/v1/packages.
 	s := newIndexedServer(t, corpus())
 	full := get(t, s, "/search?limit=100&offset=0")
 	_, total, all := decodeSearch(t, full.Body.Bytes())
 	if len(all) != len(corpus()) {
 		t.Fatalf("unpaged search returned %d of %d records", len(all), len(corpus()))
+	}
+
+	// Page through at every page size that divides — and does not divide — the
+	// corpus, so a final short page is covered too.
+	for _, limit := range []int{1, 2, 3, 4} {
+		seen := map[string]int{}
+		for off := 0; off < len(corpus()); off += limit {
+			_, _, page := decodeSearch(t, get(t, s,
+				"/search?limit="+strconv.Itoa(limit)+"&offset="+strconv.Itoa(off)).Body.Bytes())
+			if len(page) > limit {
+				t.Errorf("limit=%d offset=%d returned %d records, more than the page size",
+					limit, off, len(page))
+			}
+			for _, p := range page {
+				seen[p["name"].(string)]++
+			}
+		}
+		for _, rec := range corpus() {
+			switch n := seen[rec.Name]; {
+			case n == 0:
+				t.Errorf("limit=%d: %q is unreachable at every offset — paging must not "+
+					"skip records", limit, rec.Name)
+			case n > 1:
+				t.Errorf("limit=%d: %q appeared on %d different pages — consecutive pages "+
+					"must not overlap", limit, rec.Name, n)
+			}
+		}
+	}
+
+	// Page 0 must be the genuine top of the result set, not an arbitrary member of
+	// the leading tie group — that was the residual bug after the first fix attempt,
+	// when the candidate pool was still too small at limit=1.
+	_, _, firstOfPage := decodeSearch(t, get(t, s, "/search?limit=1&offset=0").Body.Bytes())
+	if len(firstOfPage) != 1 {
+		t.Fatalf("limit=1 returned %d records", len(firstOfPage))
+	}
+	if firstOfPage[0]["name"] != all[0]["name"] {
+		t.Errorf("limit=1&offset=0 returned %v, but the unpaged first hit is %v; a "+
+			"single-record page must be the top of the same ordering",
+			firstOfPage[0]["name"], all[0]["name"])
 	}
 
 	// `total` is the pre-offset match count and must NOT shrink as the offset moves.

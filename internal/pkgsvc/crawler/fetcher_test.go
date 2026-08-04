@@ -161,11 +161,68 @@ func TestNewHTTPFetcherBuildsClientCarryingTheTimeout(t *testing.T) {
 		t.Fatal("Client must be constructed when the caller passes nil")
 	}
 	if f.Client.Timeout != 7*time.Second {
-		t.Errorf("Client.Timeout = %v, want the 7s we asked for; Fetch relies on the "+
-			"client's own timeout, it never applies f.Timeout itself", f.Client.Timeout)
+		t.Errorf("Client.Timeout = %v, want the 7s we asked for", f.Client.Timeout)
 	}
 	if f.Timeout != 7*time.Second {
 		t.Errorf("f.Timeout = %v, want 7s", f.Timeout)
+	}
+}
+
+func TestFetchAppliesFTimeoutToACallerSuppliedClient(t *testing.T) {
+	// f.Timeout used to be stored and never read: the deadline came only from the
+	// client NewHTTPFetcher builds when passed nil. A caller supplying their own
+	// client — which is the documented reason the parameter exists, for proxy and
+	// TLS-pinning transports — therefore got a fetch with NO deadline at all, even
+	// with f.Timeout set. A stalled mirror would pin a refresh goroutine forever and
+	// the index would quietly stop updating.
+	//
+	// Fetch now derives a per-request context from f.Timeout, so the deadline holds
+	// regardless of which client is in use.
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // hold until the client gives up; no sleeps
+		close(blocked)
+	}))
+	defer srv.Close()
+
+	// A client with NO timeout of its own — the exact shape that used to hang.
+	f := NewHTTPFetcher(&http.Client{}, 150*time.Millisecond)
+	if f.Client.Timeout != 0 {
+		t.Fatalf("fixture is wrong: the caller's client must have no timeout, got %v",
+			f.Client.Timeout)
+	}
+
+	start := time.Now()
+	_, err := f.Fetch(context.Background(), srv.URL+"/dists/noble/InRelease", "")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Fetch returned nil error against a server that never responds")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false; err = %v. The "+
+			"deadline must come from f.Timeout, not from the caller's client", err)
+	}
+	// Generous upper bound: the point is that it returns at all, promptly-ish.
+	if elapsed > 5*time.Second {
+		t.Errorf("Fetch took %v, want it bounded by the 150ms f.Timeout", elapsed)
+	}
+	<-blocked // the handler observed the cancellation, so nothing is left running
+}
+
+func TestFetchWithNoTimeoutDoesNotImposeOne(t *testing.T) {
+	// Timeout <= 0 is only reachable by constructing HTTPFetcher directly (the
+	// constructor substitutes 60s). It must mean "no deadline of our own" rather
+	// than "a deadline of zero", which would cancel every request instantly.
+	srv := fxServe(t, fxPlain)
+	f := &HTTPFetcher{Client: srv.Client()} // Timeout deliberately zero
+	got, err := f.Fetch(context.Background(), srv.URL+"/dists/noble/InRelease", "")
+	if err != nil {
+		t.Fatalf("Fetch with a zero Timeout: %v — zero must mean unbounded, not "+
+			"already-expired", err)
+	}
+	if !bytes.Equal(got, fxPlain) {
+		t.Errorf("body = %q, want the stanza", got)
 	}
 }
 
@@ -335,13 +392,13 @@ func TestFetchRejectsTruncatedCompressedBody(t *testing.T) {
 	// then atomic-swap a component missing its tail — packages that silently
 	// vanish from search with nothing logged.
 	//
-	// ⚠️ On the .gz path the error arrives from io.ReadAll, which returns the
-	// bytes it managed to decode ALONGSIDE it. So unlike the checksum gate, this
-	// failure mode is not "no bytes" — it is "bytes plus error", and callers must
-	// check err first. orchestrator.go:306 and :324 do. Asserted as an error only
-	// (not len==0) because that is the honest contract; the divergence is
-	// recorded rather than pinned so a future no-partial-output fix is free to
-	// tighten it.
+	// Now asserted as NO BYTES on both paths, which was not always true. The .gz
+	// branch used to return the bytes io.ReadAll had managed to decode alongside
+	// its error — "135 valid bytes plus unexpected EOF" — while .xz happened to
+	// return none. Both callers check err first, so nothing was broken, but the
+	// asymmetric contract meant a future `body, _ := Fetch(...)` would index a
+	// Packages file missing its tail, and those packages just disappear from search
+	// after the atomic swap with nothing logged.
 	gz := fxGzip(t, fxPlain)
 	xzb := fxXz(t, fxPlain)
 	for _, tc := range []struct {
@@ -359,8 +416,15 @@ func TestFetchRejectsTruncatedCompressedBody(t *testing.T) {
 			}
 			srv := fxServe(t, tc.wire)
 			f := NewHTTPFetcher(srv.Client(), 5*time.Second)
-			if _, err := f.Fetch(context.Background(), srv.URL+tc.path, ""); err == nil {
+			partial, err := f.Fetch(context.Background(), srv.URL+tc.path, "")
+			if err == nil {
 				t.Fatalf("truncated %s stream decoded without error", tc.name)
+			}
+			// Fail CLOSED: a partially-decoded stream must yield nothing, so no
+			// caller can index a component missing its tail even by ignoring err.
+			if len(partial) != 0 {
+				t.Errorf("truncated %s returned %d bytes alongside its error; partially "+
+					"decoded repository data must never escape", tc.name, len(partial))
 			}
 
 			// Control: the UNtruncated stream at the same URL succeeds, so the
