@@ -360,13 +360,47 @@ Remaining, worst first: `pkgsvc/crawler` 283 uncovered (29.2%) · `internal/api`
 because their constituents are pinned) · `pkgsvc/handler` 52 · `pkgsvc/index` 38 ·
 `pkgsvc/seed` 37 at 0% · `pkgsvc/state` 11 · `internal/webui` 6 at 0%.
 
-### ⚠️ The threshold is NOT what the script says
+### ⚠️ The threshold is NOT what the script says — and neither is its own figure
 
-`run_coverage_tests.sh`'s own default is **64.2**, which the tree passes. CI reads
-`.coverage-threshold` (**69.0**) and passes it in — so 69.0 is the real bar. Run
-the gate as `bash scripts/run_coverage_tests.sh 69.0` to see what CI sees.
+Two separate traps, both of which produce a *wrong and reassuring* number.
 
-The shortfall is **pre-existing**: the front-end refactor touched zero `.go` files.
+**1. The default threshold is not CI's.** `run_coverage_tests.sh` defaults to **64.2**,
+which the tree has always passed. CI reads `.coverage-threshold` (**69.0**) and passes
+it in, so 69.0 is the real bar. Always run `bash scripts/run_coverage_tests.sh 69.0`.
+
+**2. Running it in a working tree still measures 0.49 points low.** `ddaf77cf` fixed
+the per-directory table to skip `node_modules`, but the **overall** figure comes from a
+separate `go test ./... -coverprofile` whose `./...` still matches
+`web/node_modules/flatted/golang` — 160 uncovered third-party statements. So the same
+script, at the same commit, against the same threshold:
+
+| where it runs | figure | verdict |
+|---|---|---|
+| this working tree (has `web/node_modules`) | 68.8% | FAIL |
+| a CI-shaped clean archive (no `node_modules`) | **69.3%** | **PASS** |
+
+CI never has `node_modules`: `actions/checkout` gives a clean tree and Earthly's
+`+test` does not `npm install` (and `.dockerignore` excludes `web/node_modules/`
+anyway). **69.3% is the figure that gates the build.**
+
+To reproduce CI exactly — and note this never touches the working tree:
+
+```bash
+rm -rf /tmp/ci-shape && mkdir -p /tmp/ci-shape
+git archive HEAD | tar -x -C /tmp/ci-shape        # tracked files only
+cd /tmp/ci-shape && ./scripts/run_coverage_tests.sh 69.0
+```
+
+**Status: PASSING as of `2729e773`.** It was failing before BE-0 — 66.76%, i.e. 506
+statements short — and that shortfall was inherited, not introduced: the front-end
+refactor touched zero `.go` files, and the 69.0 threshold arrived from upstream
+`3e0fba14`. BE-0 added **+549 covered statements** across seven commits.
+
+> Note on two figures in the `2729e773` / `bc48b6a0` commit messages: they say
+> **69.19%**, which was my own statement-count arithmetic over the profile. The
+> script's authoritative figure is **69.3%** — it rounds and its denominator differs
+> slightly. Same verdict either way (PASS), so the history was left alone rather than
+> rewritten; use 69.3% as the number, since that is what CI prints.
 
 ### Two gate-script bugs fixed in `ddaf77cf`
 
