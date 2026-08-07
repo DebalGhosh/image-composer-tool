@@ -5954,3 +5954,76 @@ func TestFixKernelSymlinksEdgeCases(t *testing.T) {
 		t.Error("Unexpected symlink created for regular file")
 	}
 }
+
+// recordingSeedExecutor captures the shell commands seedChrootDNS issues so a test
+// can assert the containment guard refused to write, without needing root.
+type recordingSeedExecutor struct{ cmds []string }
+
+func (r *recordingSeedExecutor) ExecCmd(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	r.cmds = append(r.cmds, cmdStr)
+	return "", nil
+}
+func (r *recordingSeedExecutor) ExecCmdSilent(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+func (r *recordingSeedExecutor) ExecCmdWithStream(cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+func (r *recordingSeedExecutor) ExecCmdWithInput(inputStr string, cmdStr string, sudo bool, chrootPath string, envVal []string) (string, error) {
+	return r.ExecCmd(cmdStr, sudo, chrootPath, envVal)
+}
+
+// seedChrootDNS must write the resolver ONLY when /etc/resolv.conf resolves onto the
+// ephemeral /run tmpfs. Any other shape means the destination would persist into the
+// shipped image, so it has to decline. Guarding this is the whole reason the seed is
+// safe to run unconditionally on every build.
+func TestSeedChrootDNSOnlySeedsOntoRunTmpfs(t *testing.T) {
+	tests := []struct {
+		name       string
+		linkTarget string // "" means create a regular file instead of a symlink
+		wantSeed   bool
+	}{
+		{"absolute target on /run tmpfs", "/run/systemd/resolve/stub-resolv.conf", true},
+		{"relative target on /run tmpfs", "../run/systemd/resolve/stub-resolv.conf", true},
+		{"target outside /run is refused", "/etc/resolv.conf.real", false},
+		{"target /run-prefixed but sibling dir is refused", "/runtime/resolv.conf", false},
+		{"regular file is left untouched", "", false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			installRoot := t.TempDir()
+			etcDir := filepath.Join(installRoot, "etc")
+			if err := os.MkdirAll(etcDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			etcResolv := filepath.Join(etcDir, "resolv.conf")
+			if tt.linkTarget == "" {
+				if err := os.WriteFile(etcResolv, []byte("nameserver 1.1.1.1\n"), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			} else if err := os.Symlink(tt.linkTarget, etcResolv); err != nil {
+				t.Fatalf("Symlink: %v", err)
+			}
+
+			original := shell.Default
+			defer func() { shell.Default = original }()
+			rec := &recordingSeedExecutor{}
+			shell.Default = rec
+
+			seedChrootDNS(installRoot)
+
+			if got := len(rec.cmds) > 0; got != tt.wantSeed {
+				t.Errorf("seeded = %v, want %v (commands: %v)", got, tt.wantSeed, rec.cmds)
+			}
+			// When it does seed, the destination must stay inside installRoot —
+			// a traversal here would write onto the build host.
+			for _, c := range rec.cmds {
+				if !strings.Contains(c, installRoot) {
+					t.Errorf("command escapes installRoot %q: %s", installRoot, c)
+				}
+			}
+		})
+	}
+}

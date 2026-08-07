@@ -1052,6 +1052,7 @@ func updateRootfsConfig(installRoot string, template *config.ImageTemplate) erro
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
+	seedChrootDNS(installRoot)
 	if err := addImageConfigs(installRoot, template); err != nil {
 		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
 	}
@@ -1083,6 +1084,7 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	if err := createResolvConfSymlink(installRoot, template); err != nil {
 		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
+	seedChrootDNS(installRoot)
 	if err := addImageConfigs(installRoot, template); err != nil {
 		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
 	}
@@ -1388,6 +1390,89 @@ func updateImageFstab(installRoot string, diskPathIdMap map[string]string, templ
 		}
 	}
 	return nil
+}
+
+// seedChrootDNS makes the build host's resolver reachable inside the chroot so a
+// configuration command that hits the network directly can resolve hostnames.
+//
+// createResolvConfSymlink points the chroot's /etc/resolv.conf at
+// /run/systemd/resolve/stub-resolv.conf, which only exists once systemd-resolved
+// is running on the booted image. During the build that symlink dangles, so glibc
+// falls back to 127.0.0.1:53, nothing is listening, and every network command in
+// systemConfig.configurations fails instantly — wget exits 4, curl exits 6. ICT's
+// own downloads are unaffected because they run in the build environment, not the
+// chroot, and apt is served from the local package cache.
+//
+// Writing to <installRoot>/run is safe and self-cleaning: mount.MountSysfs mounts a
+// fresh tmpfs there rather than bind-mounting the host's /run, so this can neither
+// clobber the host resolver nor survive into the shipped image once UmountSysfs
+// runs. The /run containment check below preserves that guarantee if a template
+// replaces /etc/resolv.conf with a real file or points it elsewhere.
+//
+// Best-effort throughout: a template with no network commands must not fail a build
+// because DNS seeding did not apply, so every error is logged and swallowed.
+func seedChrootDNS(installRoot string) {
+	content, err := os.ReadFile("/etc/resolv.conf") // follows a host symlink to the real file
+	if err != nil {
+		log.Debugf("Skipping chroot DNS seed (cannot read host /etc/resolv.conf: %v)", err)
+		return
+	}
+
+	etcResolv := filepath.Join(installRoot, "etc", "resolv.conf")
+	target, err := os.Readlink(etcResolv)
+	if err != nil {
+		log.Debugf("Skipping chroot DNS seed (%s is not a symlink: %v)", etcResolv, err)
+		return
+	}
+
+	guestTarget := filepath.Clean(target)
+	if !filepath.IsAbs(guestTarget) {
+		guestTarget = filepath.Clean(filepath.Join("/etc", target))
+	}
+	// Only seed onto the ephemeral /run tmpfs, so nothing lands in the image.
+	if guestTarget != "/run" && !strings.HasPrefix(guestTarget, "/run/") {
+		log.Debugf("Skipping chroot DNS seed (%s resolves to %s, not under /run)", etcResolv, guestTarget)
+		return
+	}
+
+	hostTargetPath := filepath.Join(installRoot, strings.TrimPrefix(guestTarget, "/"))
+
+	// Stage the content in our own temp dir, then copy it in under sudo: the tmpfs
+	// is root-owned mode 0700. A unique temp name keeps concurrent builds from
+	// racing on a shared staging path.
+	stagedFile, err := os.CreateTemp(config.TempDir(), "chroot-resolv-*.conf")
+	if err != nil {
+		log.Debugf("Skipping chroot DNS seed (creating staging file failed: %v)", err)
+		return
+	}
+	staged := stagedFile.Name()
+	defer func() { _ = os.Remove(staged) }()
+
+	// os.CreateTemp yields 0o600; resolv.conf is conventionally world-readable.
+	if err := stagedFile.Chmod(0o644); err != nil {
+		_ = stagedFile.Close()
+		log.Debugf("Skipping chroot DNS seed (chmod staged resolv.conf failed: %v)", err)
+		return
+	}
+	if _, err := stagedFile.Write(content); err != nil {
+		_ = stagedFile.Close()
+		log.Debugf("Skipping chroot DNS seed (staging resolv.conf failed: %v)", err)
+		return
+	}
+	if err := stagedFile.Close(); err != nil {
+		log.Debugf("Skipping chroot DNS seed (closing staged resolv.conf failed: %v)", err)
+		return
+	}
+
+	if _, err := shell.ExecCmd("mkdir -p "+shell.QuoteArg(filepath.Dir(hostTargetPath)), true, shell.HostPath, nil); err != nil {
+		log.Debugf("Skipping chroot DNS seed (creating %s failed: %v)", filepath.Dir(hostTargetPath), err)
+		return
+	}
+	if _, err := shell.ExecCmd("cp "+shell.QuoteArg(staged)+" "+shell.QuoteArg(hostTargetPath), true, shell.HostPath, nil); err != nil {
+		log.Debugf("Skipping chroot DNS seed (writing %s failed: %v)", hostTargetPath, err)
+		return
+	}
+	log.Infof("Seeded chroot DNS at %s (ephemeral, discarded with the /run tmpfs)", guestTarget)
 }
 
 func createResolvConfSymlink(installRoot string, template *config.ImageTemplate) error {
