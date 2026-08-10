@@ -1080,11 +1080,17 @@ func updateImageConfig(installRoot string, diskPathIdMap map[string]string, temp
 	if err := updateImageFstab(installRoot, diskPathIdMap, template); err != nil {
 		return fmt.Errorf("failed to update image fstab: %w", err)
 	}
-	if err := createResolvConfSymlink(installRoot, template); err != nil {
-		return fmt.Errorf("failed to create resolv.conf: %w", err)
-	}
+	// Run custom configuration commands before swapping resolv.conf to the
+	// boot-time systemd-resolved stub symlink below. That stub only exists
+	// once the shipped image actually boots under a running systemd-resolved;
+	// during the chroot build installRoot/run is an empty tmpfs, so any
+	// configurations: cmd that needs DNS (e.g. wget/curl) would silently
+	// break if it ran after the swap.
 	if err := addImageConfigs(installRoot, template); err != nil {
 		return fmt.Errorf("failed to execute customized configurations to image: %w", err)
+	}
+	if err := createResolvConfSymlink(installRoot, template); err != nil {
+		return fmt.Errorf("failed to create resolv.conf: %w", err)
 	}
 	return nil
 }

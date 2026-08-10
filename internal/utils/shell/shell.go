@@ -282,15 +282,20 @@ func GetOSEnvirons() map[string]string {
 	return environ
 }
 
-// GetOSProxyEnvirons retrieves HTTP and HTTPS proxy environment variables
+// GetOSProxyEnvirons retrieves HTTP, HTTPS, and NO_PROXY environment variables
 func GetOSProxyEnvirons() map[string]string {
 	osEnv := GetOSEnvirons()
 	proxyEnv := make(map[string]string)
 
-	// Extract http_proxy and https_proxy variables
+	// Extract http_proxy, https_proxy, and no_proxy variables (in either
+	// case). no_proxy must travel with the proxy settings it qualifies --
+	// forwarding http_proxy/https_proxy into a chroot/sudo exec without it
+	// silently drops any proxy exclusions the caller configured.
 	for key, value := range osEnv {
-		if strings.Contains(strings.ToLower(key), "http_proxy") ||
-			strings.Contains(strings.ToLower(key), "https_proxy") {
+		lowerKey := strings.ToLower(key)
+		if strings.Contains(lowerKey, "http_proxy") ||
+			strings.Contains(lowerKey, "https_proxy") ||
+			strings.Contains(lowerKey, "no_proxy") {
 			proxyEnv[key] = value
 		}
 	}
