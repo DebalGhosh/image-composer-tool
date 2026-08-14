@@ -620,6 +620,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 			return fullPathCmdStr, fmt.Errorf("chroot path %s does not exist", chrootPath)
 		}
 
+		ReportProxyEnvOnce()
 		proxyEnv := GetOSProxyEnvirons()
 
 		for key, value := range proxyEnv {
@@ -636,6 +637,7 @@ func GetFullCmdStr(cmdStr string, sudo bool, chrootPath string, envVal []string)
 
 	} else {
 		if sudo {
+			ReportProxyEnvOnce()
 			proxyEnv := GetOSProxyEnvirons()
 
 			for key, value := range proxyEnv {

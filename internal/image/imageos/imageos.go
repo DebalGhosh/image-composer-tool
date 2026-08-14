@@ -1320,9 +1320,16 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 		cmdStr := configInfo.Cmd
 		// Use chroot to execute commands in the image context with proper shell
 		chrootCmd := fmt.Sprintf("chroot %s /bin/bash -c %s", installRoot, strconv.Quote(cmdStr))
-		if _, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil); err != nil {
-			log.Errorf("Failed to execute custom configuration cmd %s: %v", configInfo.Cmd, err)
-			return fmt.Errorf("failed to execute custom configuration cmd %s: %w", configInfo.Cmd, err)
+		// Keep the command's output and attach it to the error. ExecCmd's error is
+		// only the exit status ("exit status 4"), which alone cannot distinguish a
+		// DNS failure from a proxy failure from a 404. Discarding it here left
+		// operators with nothing to go on. Mirrors overlay's RunOverlayConfigurations.
+		out, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil)
+		if err != nil {
+			log.Errorf("Failed to execute custom configuration cmd %s: %v%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
+			return fmt.Errorf("failed to execute custom configuration cmd %s: %w%s",
+				configInfo.Cmd, err, shell.FormatCommandOutput(out))
 		}
 		log.Debugf("Successfully executed custom configuration cmd: %s", configInfo.Cmd)
 	}
