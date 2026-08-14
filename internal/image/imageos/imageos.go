@@ -1325,6 +1325,14 @@ func addImageConfigs(installRoot string, template *config.ImageTemplate) error {
 		// DNS failure from a proxy failure from a 404. Discarding it here left
 		// operators with nothing to go on. Mirrors overlay's RunOverlayConfigurations.
 		out, err := shell.ExecCmd(chrootCmd, true, shell.HostPath, nil)
+		// Always log the output, matching the apt-get install path above. These are
+		// operator-authored commands whose whole purpose may be to report something
+		// (a diagnostic probe, a version check); logging only on failure silently
+		// discards that. Commands that succeed but print a warning are equally
+		// invisible otherwise.
+		if strings.TrimSpace(out) != "" {
+			log.Infof("Configuration cmd output for %s:%s", configInfo.Cmd, shell.FormatCommandOutput(out))
+		}
 		if err != nil {
 			log.Errorf("Failed to execute custom configuration cmd %s: %v%s",
 				configInfo.Cmd, err, shell.FormatCommandOutput(out))
